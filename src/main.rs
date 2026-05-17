@@ -107,3 +107,48 @@ fn main() {
     println!("Operacja zakończona powodzeniem.");
     print_stats(input_data.len(), output_data.len());
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compress_and_decompress_text() {
+        let input = b"AAAABBBCCDAA";
+
+        let compressed = compress(input);
+        let decompressed = decompress(&compressed).unwrap();
+
+        assert_eq!(input.to_vec(), decompressed);
+    }
+
+    #[test]
+    fn test_empty_data() {
+        let input = b"";
+
+        let compressed = compress(input);
+        let decompressed = decompress(&compressed).unwrap();
+
+        assert_eq!(input.to_vec(), decompressed);
+    }
+
+    #[test]
+    fn test_no_repetitions() {
+        let input = b"ABCDEF";
+
+        let compressed = compress(input);
+        let decompressed = decompress(&compressed).unwrap();
+
+        assert_eq!(input.to_vec(), decompressed);
+    }
+
+    #[test]
+    fn test_long_sequence() {
+        let input = vec![b'A'; 300];
+
+        let compressed = compress(&input);
+        let decompressed = decompress(&compressed).unwrap();
+
+        assert_eq!(input, decompressed);
+    }
+}
