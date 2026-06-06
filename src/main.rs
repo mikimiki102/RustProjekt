@@ -1,34 +1,8 @@
 use std::env;
 use std::fs;
 use std::process;
-
-fn compress(data: &[u8]) -> Vec<u8> {
-    let mut result = Vec::new();
-
-    if data.is_empty() {
-        return result;
-    }
-
-    let mut current_byte = data[0];
-    let mut count: u8 = 1;
-
-    for &byte in &data[1..] {
-        if byte == current_byte && count < u8::MAX {
-            count += 1;
-        } else {
-            result.push(count);
-            result.push(current_byte);
-
-            current_byte = byte;
-            count = 1;
-        }
-    }
-
-    result.push(count);
-    result.push(current_byte);
-
-    result
-}
+pub mod core;
+use core::rlecompress::byte_level_compress;
 
 fn decompress(data: &[u8]) -> Result<Vec<u8>, String> {
     if data.len() % 2 != 0 {
@@ -63,9 +37,10 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 4 {
-        eprintln!("Użycie - Instrukcja jak odpalic:");
-        eprintln!("  cargo run -- compress <plik_wejściowy> <plik_wyjściowy>");
-        eprintln!("  cargo run -- decompress <plik_wejściowy> <plik_wyjściowy>");
+        eprintln!("Usage: cargo run --<mode[required]> <input_file[required]> <output_file[required]>");
+        eprintln!("Examples:");
+        eprintln!("  cargo run --compress input output.rle");
+        eprintln!("  cargo run --decompress input.rle output");
         process::exit(1);
     }
 
@@ -82,7 +57,7 @@ fn main() {
     };
 
     let output_data = match mode.as_str() {
-        "compress" => compress(&input_data),
+        "compress" => byte_level_compress(&input_data),
 
         "decompress" => match decompress(&input_data) {
             Ok(data) => data,
@@ -116,7 +91,7 @@ mod tests {
     fn test_compress_and_decompress_text() {
         let input = b"AAAABBBCCDAA";
 
-        let compressed = compress(input);
+        let compressed = byte_level_compress(input);
         let decompressed = decompress(&compressed).unwrap();
 
         assert_eq!(input.to_vec(), decompressed);
@@ -126,7 +101,7 @@ mod tests {
     fn test_empty_data() {
         let input = b"";
 
-        let compressed = compress(input);
+        let compressed = byte_level_compress(input);
         let decompressed = decompress(&compressed).unwrap();
 
         assert_eq!(input.to_vec(), decompressed);
@@ -136,7 +111,7 @@ mod tests {
     fn test_no_repetitions() {
         let input = b"ABCDEF";
 
-        let compressed = compress(input);
+        let compressed = byte_level_compress(input);
         let decompressed = decompress(&compressed).unwrap();
 
         assert_eq!(input.to_vec(), decompressed);
@@ -146,7 +121,7 @@ mod tests {
     fn test_long_sequence() {
         let input = vec![b'A'; 300];
 
-        let compressed = compress(&input);
+        let compressed = byte_level_compress(&input);
         let decompressed = decompress(&compressed).unwrap();
 
         assert_eq!(input, decompressed);
