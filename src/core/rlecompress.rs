@@ -118,24 +118,28 @@ pub fn bit_level_decompress(data: &[u8]) -> Result<Vec<u8>, &str> {
     
     result.push(0u8);
     let mut curr_shf = 0u8;
+    let mut total_cnt: usize = 0;
 
     for (i, byte) in data.iter().enumerate() {
         let count = get_bit_cnt!(byte);
         let bit = get_repr_bit!(byte);
+        total_cnt += count as usize;
 
-        for _ in 0..count {
+        for j in 0..count {
             let prev = result.last_mut().unwrap();
             *prev |= bit << curr_shf;
             curr_shf += 1;
 
             if curr_shf >= 8 {
                 curr_shf = 0;
-                if i < data.len() - 1 {
+                if j < count - 1 || i < data.len() - 1 {
                     result.push(0u8);
                 }
             }
         }
     }
+
+    assert!(total_cnt % 8 == 0, "Bit bufor is misaligned");
 
     Ok(result)
 }
