@@ -1,15 +1,23 @@
-use std::fs::{self, File};
-use std::io::{BufWriter, Read, Write};
-use std::sync::{mpsc, Arc};
+use std::fs::{File};
+use std::io::{BufWriter, Read, Write, Seek, SeekFrom, ErrorKind};
+use std::sync::{mpsc};
 use std::path::PathBuf;
 
 use crate::get_bit_cnt;
+
+/* Compressor mode specifier.
+ * Compressing either bits, or bytes.
+ */
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompressorLevel {
     CompressorBitLevel,
     CompressorByteLevel,
 }
+
+/* Differentiate between different
+ * internal functions while parsing and compressing a file.
+ */
 
 impl CompressorLevel {
     pub fn get_compressor_fn(&self) -> fn(&[u8]) -> Vec<u8> {
@@ -25,6 +33,13 @@ impl CompressorLevel {
             CompressorLevel::CompressorByteLevel => crate::core::rlecompress::byte_level_decompress,
         }
     }
+
+    pub fn get_reader_fn(&self) -> fn(&mut File, &FileCompressSettings) -> std::io::Result<Option<Vec<u8>>> {
+        match self {
+            CompressorLevel::CompressorBitLevel => FileCompressor::bit_level_buf_reader,
+            CompressorLevel::CompressorByteLevel => FileCompressor::byte_level_buf_reader,
+        }
+    }
 }
 
 /* Specify input file and output file for the compressor.
@@ -37,7 +52,7 @@ pub struct FileCompressPipeline {
 }
 
 /* Specify compressing settings.
- * Increasing 'chunk_size' might increase performance
+ * Increasing 'chunk_size_hint' might increase performance
  * while compressing big files, but setting it to high value
  * might be an overkill for just small files.
  * 'compressor_level' stands for compression mode, either bit or byte compression.
@@ -45,7 +60,7 @@ pub struct FileCompressPipeline {
 
 #[derive(Debug, Clone)]
 pub struct FileCompressSettings {
-    pub chunk_size: usize,
+    pub chunk_size_hint: usize,
     pub compression_level: CompressorLevel,
 }
 
@@ -58,9 +73,24 @@ pub struct FileCompressor {
     pub settings: FileCompressSettings,  
 }
 
+pub trait BuffReaderTrait: 
+    FnMut(&mut File, &FileCompressSettings) -> std::io::Result<Option<Vec<u8>>> + Send + 'static {}
+
+impl<T> BuffReaderTrait for T 
+where
+    T: FnMut(&mut File, &FileCompressSettings) -> std::io::Result<Option<Vec<u8>>> + Send + 'static {}
+
 impl FileCompressor {
+    fn get_bytes_left(file: &mut File) -> std::io::Result<u64> {
+        let current_position = file.stream_position()?;
+        let total_size = file.seek(SeekFrom::End(0))?;
+        file.seek(SeekFrom::Start(current_position))?;
+        let bytes_left = total_size - current_position;
+        Ok(bytes_left)
+    }
+
     pub fn new(settings: &FileCompressSettings) -> Self {
-        if settings.chunk_size < 2 && 
+        if settings.chunk_size_hint < 2 && 
            settings.compression_level == CompressorLevel::CompressorByteLevel {
            panic!("Minimum chunk size for byte-level compression is 2");
         }
@@ -70,13 +100,72 @@ impl FileCompressor {
         }
     }
 
+    pub fn bit_level_buf_reader(file: &mut File, 
+                                settings: &FileCompressSettings) -> std::io::Result<Option<Vec<u8>>> 
+    {
+        let _chunk_size = settings.chunk_size_hint; // TODO: use that information while creating buffers?
+        let mut dynamic_buffer = Vec::new();
+        let mut total_bits: usize = 0;
+        let mut single_byte_buf = [0u8; 1];
+
+        loop {
+            match file.read_exact(&mut single_byte_buf) {
+                Ok(()) => {
+                    let byte = single_byte_buf[0];
+                    dynamic_buffer.push(byte);
+                    total_bits += get_bit_cnt!(byte) as usize;
+
+                    if total_bits > 0 && total_bits % 8 == 0 {
+                        return Ok(Some(std::mem::take(&mut dynamic_buffer)));
+                    }
+                }
+                Err(e) => {
+                    if e.kind() == ErrorKind::UnexpectedEof {
+                        if !dynamic_buffer.is_empty() {
+                            return Ok(Some(std::mem::take(&mut dynamic_buffer)));
+                        }
+                        return Ok(None);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    pub fn byte_level_buf_reader(file: &mut File, 
+                                 settings: &FileCompressSettings) -> std::io::Result<Option<Vec<u8>>> 
+    {
+        let bytes_to_read = Self::get_bytes_left(file)? as usize;
+        let chunk_size = settings.chunk_size_hint;
+        let buffer_size = std::cmp::min(bytes_to_read, chunk_size);
+        let mut buffer = Vec::with_capacity(buffer_size);
+
+        match file.take(chunk_size as u64).read_to_end(&mut buffer) {
+            Ok(bytes_read) => {
+                if bytes_read == 0 {
+                    return Ok(None);
+                }
+
+                if bytes_read < chunk_size {
+                    buffer.truncate(bytes_read);
+                }
+
+                return Ok(Some(buffer));
+            }
+            Err(e) => {
+                eprintln!("Error while reading from file: {e}");
+                Err(e)
+            }
+        }
+    }
+
     fn stream_input_to_output(&self, 
                               pipeline: &FileCompressPipeline, 
-                              policy: Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'static>) 
+                              mut buf_read_policy: impl BuffReaderTrait,
+                              transform_policy: impl Fn(&[u8]) -> Vec<u8> + Send + Sync + 'static) 
     {
         let input_path = pipeline.input.clone();
         let output_path = &pipeline.output;
-        let chunk_size = self.settings.chunk_size;
 
         let read_chunk_channel_size = 8;
 
@@ -85,13 +174,13 @@ impl FileCompressor {
         let (reader_msg_sender, reader_msg_receiver) = 
             mpsc::sync_channel::<bool>(1);
         
-        let mut bytes_to_read = fs::metadata(input_path.clone()).unwrap().len() as usize;
-
         // Reading thread.
         // Here, we read chunks of data
         // and then send them to another thread.
+        let settings = self.settings.clone();
+
         std::thread::spawn(move || {
-            /*
+
             // Open input file and handle errors
             let mut file = match File::open(&input_path) {
                 Ok(f) => f,
@@ -101,90 +190,22 @@ impl FileCompressor {
                 }
             };
 
+            // Sequentially read next buffers with 'buf_read_policy'
             while !reader_msg_receiver.try_recv().unwrap_or(false) {
-                // Create zeroed buffer and read chunk from file.
-                let buffer_size = std::cmp::min(bytes_to_read, chunk_size);
-                let mut buffer = Vec::with_capacity(buffer_size);
-
-                match (&mut file).take(chunk_size as u64).read_to_end(&mut buffer) {
-                    Ok(bytes_read) => {
-                        if bytes_read == 0 {
-                            break;
-                        }
-
-                        if bytes_read < chunk_size {
-                            buffer.truncate(bytes_read);
-                        }
-
+                match buf_read_policy(&mut file, &settings) {
+                    Ok(Some(buffer)) => {
                         if reader_sender.send(buffer).is_err() {
                             break;
                         }
-
-                        bytes_to_read -= bytes_read;
+                    }
+                    Ok(None) => {
+                        break;
                     }
                     Err(e) => {
                         eprintln!("Error while reading from file: {e}");
                         break;
                     }
                 }
-            }*/
-            let mut file = match File::open(&input_path) {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!("Couldn't open input file: {e}");
-                    return;
-                }
-            };
-
-            // Tworzymy bufor akumulacyjny oraz licznik bitów
-            let mut dynamic_buffer = Vec::new();
-            let mut total_bits: usize = 0;
-            
-            // Tablica pomocnicza do odczytu pojedynczego bajtu z pliku
-            let mut single_byte_buf = [0u8; 1];
-
-            while !reader_msg_receiver.try_recv().unwrap_or(false) {
-                // Czytamy dokładnie 1 bajt z pliku
-                match file.read_exact(&mut single_byte_buf) {
-                    Ok(()) => {
-                        let byte = single_byte_buf[0];
-                        
-                        // Dodajemy przeczytany bajt do naszego bufora akumulacyjnego
-                        dynamic_buffer.push(byte);
-                        
-                        // Sumujemy bity za pomocą Twojego makra
-                        total_bits += get_bit_cnt!(byte) as usize;
-
-                        // JEŻELI liczba bitów jest podzielna przez 8 i bufor nie jest pusty
-                        if total_bits > 0 && total_bits % 8 == 0 {
-                            // Tworzymy kopię bufora do wysłania, a istniejący czyścimy (zerujemy alokację)
-                            let buffer_to_send = std::mem::take(&mut dynamic_buffer);
-                            
-                            if reader_sender.send(buffer_to_send).is_err() {
-                                break;
-                            }
-                            
-                            // Resetujemy licznik bitów dla nowej paczki danych
-                            total_bits = 0;
-                        }
-                    }
-                    Err(e) => {
-                        // Jeśli dotarliśmy do końca pliku (EOF), to poprawnie przerywamy pętlę
-                        if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                            break;
-                        }
-                        eprintln!("Error while reading from file: {e}");
-                        break;
-                    }
-                }
-            }
-
-            // --- ZABEZPIECZENIE KOŃCÓWKI PLIKU ---
-            // Jeśli plik się skończył, a w buforze zostały jeszcze jakieś bajty 
-            // (bo np. cały plik nie dzielił się idealnie przez 8 bitów),
-            // musimy wypchnąć tę końcówkę, aby nie zgubić danych!
-            if !dynamic_buffer.is_empty() {
-                let _ = reader_sender.send(dynamic_buffer);
             }
         });
 
@@ -206,7 +227,7 @@ impl FileCompressor {
                 }
 
                 // Decompress raw chunk buffer using provided policy function
-                let transform_buffer = policy(&chunk_buffer);
+                let transform_buffer = transform_policy(&chunk_buffer);
 
                 if transform_sender.send(transform_buffer).is_err() {
                     let _ = reader_msg_sender.send(true);
@@ -241,16 +262,24 @@ impl FileCompressor {
 
     pub fn compress_input_to_output(&self, pipeline: &FileCompressPipeline) {
         let compress_fn = self.settings.compression_level.get_compressor_fn();
-        self.stream_input_to_output(pipeline, Arc::new(compress_fn));
+        let buf_read_fn = self.settings.compression_level.get_reader_fn();
+        
+        self.stream_input_to_output(pipeline,
+                                    buf_read_fn, 
+                                    compress_fn);
     }
 
     pub fn decompress_input_to_output(&self, pipeline: &FileCompressPipeline) {
         let compression_level = self.settings.compression_level.clone();
-
-        self.stream_input_to_output(pipeline, Arc::new(move |buffer: &[u8]| {
+        let buf_read_fn = self.settings.compression_level.get_reader_fn();
+        let compress_fn = move |buffer: &[u8]| {
             let decompress_fn = compression_level.get_decompressor_fn();
             decompress_fn(buffer).unwrap()
-        }));
+        };
+
+        self.stream_input_to_output(pipeline, 
+                                    buf_read_fn, 
+                                    compress_fn);
     }
 }
 
@@ -448,23 +477,22 @@ mod tests {
 
         let (expect_output, _) = create_random_byte_data_file(tmp_input_fp.clone()).unwrap();
 
-        let pipeline = FileCompressPipeline {
-            input: tmp_input_fp,
-            output: tmp_output_fp,
-        };
-
         let settings = FileCompressSettings {
-            chunk_size: 512,
+            chunk_size_hint: 512,
             compression_level: CompressorLevel::CompressorByteLevel,
         };
 
         let compressor = FileCompressor::new(&settings);
 
         // Actual compression
-        compressor.compress_input_to_output(&pipeline);
+        compressor.compress_input_to_output(
+        &FileCompressPipeline {
+            input: tmp_input_fp.clone(),
+            output: tmp_output_fp.clone(),
+        });
 
         // Check compression
-        let mut compressed_file = File::open(&pipeline.output)?;
+        let mut compressed_file = File::open(&tmp_output_fp)?;
         let mut file_output = Vec::new();
 
         compressed_file.read_to_end(&mut file_output)?;
@@ -474,8 +502,8 @@ mod tests {
                 "Byte-level compression is invalid");
 
         // Delete temporary files
-        std::fs::remove_file(&pipeline.input)?;
-        std::fs::remove_file(&pipeline.output)?;
+        std::fs::remove_file(&tmp_input_fp)?;
+        std::fs::remove_file(&tmp_output_fp)?;
 
         Ok(())
     }
@@ -491,23 +519,22 @@ mod tests {
         let (compress_output, _decompess_output) = 
             create_random_bit_data_file(tmp_input_fp.clone()).unwrap();
 
-        let pipeline = FileCompressPipeline {
-            input: tmp_input_fp,
-            output: tmp_output_fp,
-        };
-
         let settings = FileCompressSettings {
-            chunk_size: 512,
+            chunk_size_hint: 512,
             compression_level: CompressorLevel::CompressorBitLevel,
         };
 
         let compressor = FileCompressor::new(&settings);
 
         // Actual compression
-        compressor.compress_input_to_output(&pipeline);
+        compressor.compress_input_to_output(
+        &FileCompressPipeline {
+            input: tmp_input_fp.clone(),
+            output: tmp_output_fp.clone(),
+        });
 
         // Check compression
-        let mut compressed_file = File::open(&pipeline.output)?;
+        let mut compressed_file = File::open(&tmp_output_fp)?;
         let mut file_output = Vec::new();
 
         compressed_file.read_to_end(&mut file_output)?;
@@ -517,8 +544,8 @@ mod tests {
                 "Bit-level compression is invalid");
 
         // Delete temporary files
-        let _ = std::fs::remove_file(&pipeline.input)?;
-        let _ = std::fs::remove_file(&pipeline.output)?;
+        let _ = std::fs::remove_file(&tmp_input_fp)?;
+        let _ = std::fs::remove_file(&tmp_output_fp)?;
 
         Ok(())
     }
@@ -536,26 +563,24 @@ mod tests {
 
         let (_compress_output, decompress_output)= 
             create_random_byte_data_file(tmp_input_fp.clone()).unwrap();
-
-        let pipeline_compress = FileCompressPipeline {
-            input: tmp_input_fp.clone(),
-            output: tmp_output_fp.clone(),
-        };
-
-        let pipeline_decompress = FileCompressPipeline {
-            input: tmp_output_fp.clone(),
-            output: tmp_final_output_fp.clone(),
-        };
-
+            
         let settings = FileCompressSettings {
-            chunk_size: 8,
+            chunk_size_hint: 8,
             compression_level: CompressorLevel::CompressorByteLevel,
         };
 
         let compressor = FileCompressor::new(&settings);
 
-        compressor.compress_input_to_output(&pipeline_compress);
-        compressor.decompress_input_to_output(&pipeline_decompress);
+        compressor.compress_input_to_output(
+        &FileCompressPipeline {
+            input: tmp_input_fp.clone(),
+            output: tmp_output_fp.clone(),
+        });
+        compressor.decompress_input_to_output(
+        &FileCompressPipeline {
+            input: tmp_output_fp.clone(),
+            output: tmp_final_output_fp.clone(),
+        });
 
         let mut input= File::open(&tmp_final_output_fp)?;
         let mut result = Vec::new();
@@ -586,25 +611,23 @@ mod tests {
         let (_compress_output, decompress_output)= 
             create_random_bit_data_file(tmp_input_fp.clone()).unwrap();
 
-        let pipeline_compress = FileCompressPipeline {
-            input: tmp_input_fp.clone(),
-            output: tmp_output_fp.clone(),
-        };
-
-        let pipeline_decompress = FileCompressPipeline {
-            input: tmp_output_fp.clone(),
-            output: tmp_final_output_fp.clone(),
-        };
-
         let settings = FileCompressSettings {
-            chunk_size: 8,
+            chunk_size_hint: 8,
             compression_level: CompressorLevel::CompressorBitLevel,
         };
 
         let compressor = FileCompressor::new(&settings);
 
-        compressor.compress_input_to_output(&pipeline_compress);
-        compressor.decompress_input_to_output(&pipeline_decompress);
+        compressor.compress_input_to_output(
+        &FileCompressPipeline {
+            input: tmp_input_fp.clone(),
+            output: tmp_output_fp.clone(),
+        });
+        compressor.decompress_input_to_output(
+        &FileCompressPipeline {
+            input: tmp_output_fp.clone(),
+            output: tmp_final_output_fp.clone(),
+        });
 
         let mut input= File::open(&tmp_final_output_fp)?;
         let mut result = Vec::new();
