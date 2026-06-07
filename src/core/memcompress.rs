@@ -24,6 +24,18 @@ macro_rules! get_bit_cnt {
     };
 }
 
+#[macro_export]
+macro_rules! bit_cluster {
+    ($cnt:expr, $bit:expr) => {
+        (($cnt) | ($bit << 7))
+    };
+}
+
+// We save count in entire byte.
+const BYTE_LV_CLUSTER_MAX_CNT: u8 = u8::MAX;    
+// We save count in lower 7-bits of a byte, that is u8::MAX / 2 maximum.
+const BIT_LV_CLUSTER_MAX_CNT: u8 = u8::MAX / 2; 
+
 pub fn byte_level_compress(data: &[u8]) -> Vec<u8> {
     let mut result = Vec::new();
 
@@ -35,7 +47,7 @@ pub fn byte_level_compress(data: &[u8]) -> Vec<u8> {
     let mut curr_cnt: u8 = 1;
 
     for &byte in &data[1..] {
-        if byte == curr_byte && curr_cnt < u8::MAX {
+        if byte == curr_byte && curr_cnt < BYTE_LV_CLUSTER_MAX_CNT {
             curr_cnt += 1;
         } 
         else {
@@ -67,11 +79,11 @@ pub fn bit_level_compress(data: &[u8]) -> Vec<u8> {
         for shf in 0..8 {
             let bit = get_bit!(*byte, shf);
 
-            if bit == curr_bit && curr_cnt < u8::MAX / 2 {
+            if bit == curr_bit && curr_cnt < BIT_LV_CLUSTER_MAX_CNT {
                 curr_cnt += 1;
             }
             else {
-                let cluster = curr_cnt | (curr_bit << 7);
+                let cluster = bit_cluster!(curr_cnt, curr_bit);
                 result.push(cluster);
 
                 curr_bit = bit;
@@ -80,7 +92,7 @@ pub fn bit_level_compress(data: &[u8]) -> Vec<u8> {
         }
     }
 
-    let cluster = curr_cnt | (curr_bit << 7);
+    let cluster = bit_cluster!(curr_cnt, curr_bit);
     result.push(cluster);
 
     result

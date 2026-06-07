@@ -1,2 +1,2 @@
-pub mod rlecompress;
+pub mod memcompress;
 pub mod file;

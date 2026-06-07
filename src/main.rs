@@ -2,17 +2,7 @@ use std::env;
 use std::fs;
 use std::process;
 pub mod core;
-use core::rlecompress::{byte_level_compress, byte_level_decompress};
-
-fn print_stats(original_size: usize, output_size: usize) {
-    println!("Rozmiar wejściowy: {} bajtów", original_size);
-    println!("Rozmiar wyjściowy: {} bajtów", output_size);
-
-    if original_size > 0 {
-        let ratio = output_size as f64 / original_size as f64 * 100.0;
-        println!("Rozmiar po operacji: {:.2}% rozmiaru wejściowego", ratio);
-    }
-}
+use core::memcompress::{byte_level_compress, byte_level_decompress};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -60,6 +50,5 @@ fn main() {
         process::exit(1);
     }
 
-    println!("Operacja zakończona powodzeniem.");
-    print_stats(input_data.len(), output_data.len());
+    println!("Done.");
 }

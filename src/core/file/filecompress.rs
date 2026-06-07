@@ -1,9 +1,23 @@
-use std::fs::{File};
-use std::io::{BufWriter, Read, Write, Seek, SeekFrom, ErrorKind};
-use std::sync::{mpsc};
+use std::fs::File;
+use std::sync::mpsc;
 use std::path::PathBuf;
-
 use crate::get_bit_cnt;
+use std::io::{
+    BufWriter, 
+    Read, 
+    Write, 
+    Seek, 
+    SeekFrom, 
+    ErrorKind
+};
+
+fn get_bytes_left(file: &mut File) -> std::io::Result<u64> {
+    let current_position = file.stream_position()?;
+    let total_size = file.seek(SeekFrom::End(0))?;
+    file.seek(SeekFrom::Start(current_position))?;
+    let bytes_left = total_size - current_position;
+    Ok(bytes_left)
+}
 
 /* Compressor mode specifier.
  * Compressing either bits, or bytes.
@@ -22,22 +36,31 @@ pub enum CompressorLevel {
 impl CompressorLevel {
     pub fn get_compressor_fn(&self) -> fn(&[u8]) -> Vec<u8> {
         match self {
-            CompressorLevel::CompressorBitLevel => crate::core::rlecompress::bit_level_compress,
-            CompressorLevel::CompressorByteLevel => crate::core::rlecompress::byte_level_compress,
+            CompressorLevel::CompressorBitLevel => 
+                crate::core::memcompress::bit_level_compress,
+
+            CompressorLevel::CompressorByteLevel => 
+                crate::core::memcompress::byte_level_compress,
         }
     }
 
     pub fn get_decompressor_fn(&self) -> fn(&[u8]) -> Result<Vec<u8>, &str> {
         match self {
-            CompressorLevel::CompressorBitLevel => crate::core::rlecompress::bit_level_decompress,
-            CompressorLevel::CompressorByteLevel => crate::core::rlecompress::byte_level_decompress,
+            CompressorLevel::CompressorBitLevel => 
+                crate::core::memcompress::bit_level_decompress,
+
+            CompressorLevel::CompressorByteLevel => 
+                crate::core::memcompress::byte_level_decompress,
         }
     }
 
     pub fn get_reader_fn(&self) -> fn(&mut File, &FileCompressSettings) -> std::io::Result<Option<Vec<u8>>> {
         match self {
-            CompressorLevel::CompressorBitLevel => FileCompressor::bit_level_buf_reader,
-            CompressorLevel::CompressorByteLevel => FileCompressor::byte_level_buf_reader,
+            CompressorLevel::CompressorBitLevel => 
+                FileCompressor::aligned_bit_buf_reader,
+
+            CompressorLevel::CompressorByteLevel => 
+                FileCompressor::byte_buf_reader,
         }
     }
 }
@@ -74,21 +97,22 @@ pub struct FileCompressor {
 }
 
 pub trait BuffReaderTrait: 
-    FnMut(&mut File, &FileCompressSettings) -> std::io::Result<Option<Vec<u8>>> + Send + 'static {}
+    FnMut(&mut File, &FileCompressSettings) 
+        -> std::io::Result<Option<Vec<u8>>> + Send + 'static {}
+
+pub trait BuffTransformTrait:
+    Fn(&[u8]) -> Vec<u8> + Send + Sync + 'static {}
 
 impl<T> BuffReaderTrait for T 
 where
-    T: FnMut(&mut File, &FileCompressSettings) -> std::io::Result<Option<Vec<u8>>> + Send + 'static {}
+    T: FnMut(&mut File, &FileCompressSettings) 
+        -> std::io::Result<Option<Vec<u8>>> + Send + 'static {}
+
+impl<T> BuffTransformTrait for T
+where 
+    T: Fn(&[u8]) -> Vec<u8> + Send + Sync + 'static {}
 
 impl FileCompressor {
-    fn get_bytes_left(file: &mut File) -> std::io::Result<u64> {
-        let current_position = file.stream_position()?;
-        let total_size = file.seek(SeekFrom::End(0))?;
-        file.seek(SeekFrom::Start(current_position))?;
-        let bytes_left = total_size - current_position;
-        Ok(bytes_left)
-    }
-
     pub fn new(settings: &FileCompressSettings) -> Self {
         if settings.chunk_size_hint < 2 && 
            settings.compression_level == CompressorLevel::CompressorByteLevel {
@@ -100,29 +124,33 @@ impl FileCompressor {
         }
     }
 
-    pub fn bit_level_buf_reader(file: &mut File, 
-                                settings: &FileCompressSettings) -> std::io::Result<Option<Vec<u8>>> 
+    pub fn aligned_bit_buf_reader(file: &mut File, 
+                                  settings: &FileCompressSettings) 
+        -> std::io::Result<Option<Vec<u8>>> 
     {
-        let _chunk_size = settings.chunk_size_hint; // TODO: use that information while creating buffers?
-        let mut dynamic_buffer = Vec::new();
-        let mut total_bits: usize = 0;
-        let mut single_byte_buf = [0u8; 1];
+        let chunk_size = settings.chunk_size_hint;
+        let mut buffer = Vec::with_capacity(chunk_size);
+        let mut total_bit_cnt: usize = 0;
+        let mut one_byte_buf = [0u8; 1];
 
         loop {
-            match file.read_exact(&mut single_byte_buf) {
+            match file.read_exact(&mut one_byte_buf) {
                 Ok(()) => {
-                    let byte = single_byte_buf[0];
-                    dynamic_buffer.push(byte);
-                    total_bits += get_bit_cnt!(byte) as usize;
+                    let byte = one_byte_buf[0];
+                    total_bit_cnt += get_bit_cnt!(byte) as usize;
 
-                    if total_bits > 0 && total_bits % 8 == 0 {
-                        return Ok(Some(std::mem::take(&mut dynamic_buffer)));
+                    buffer.push(byte);
+
+                    if total_bit_cnt > 0 && 
+                       total_bit_cnt % 8 == 0 && 
+                       total_bit_cnt / 8 >= chunk_size {
+                        return Ok(Some(std::mem::take(&mut buffer)));
                     }
                 }
                 Err(e) => {
                     if e.kind() == ErrorKind::UnexpectedEof {
-                        if !dynamic_buffer.is_empty() {
-                            return Ok(Some(std::mem::take(&mut dynamic_buffer)));
+                        if !buffer.is_empty() {
+                            return Ok(Some(std::mem::take(&mut buffer)));
                         }
                         return Ok(None);
                     }
@@ -132,10 +160,11 @@ impl FileCompressor {
         }
     }
 
-    pub fn byte_level_buf_reader(file: &mut File, 
-                                 settings: &FileCompressSettings) -> std::io::Result<Option<Vec<u8>>> 
+    pub fn byte_buf_reader(file: &mut File, 
+                           settings: &FileCompressSettings) 
+        -> std::io::Result<Option<Vec<u8>>> 
     {
-        let bytes_to_read = Self::get_bytes_left(file)? as usize;
+        let bytes_to_read = get_bytes_left(file)? as usize;
         let chunk_size = settings.chunk_size_hint;
         let buffer_size = std::cmp::min(bytes_to_read, chunk_size);
         let mut buffer = Vec::with_capacity(buffer_size);
@@ -162,7 +191,7 @@ impl FileCompressor {
     fn stream_input_to_output(&self, 
                               pipeline: &FileCompressPipeline, 
                               mut buf_read_policy: impl BuffReaderTrait,
-                              transform_policy: impl Fn(&[u8]) -> Vec<u8> + Send + Sync + 'static) 
+                              transform_policy: impl BuffTransformTrait) 
     {
         let input_path = pipeline.input.clone();
         let output_path = &pipeline.output;
@@ -170,7 +199,7 @@ impl FileCompressor {
         let read_chunk_channel_size = 8;
 
         let (reader_sender, reader_receiver) = 
-            mpsc::sync_channel::<Vec<u8>>(read_chunk_channel_size );
+            mpsc::sync_channel::<Vec<u8>>(read_chunk_channel_size);
         let (reader_msg_sender, reader_msg_receiver) = 
             mpsc::sync_channel::<bool>(1);
         
@@ -290,9 +319,13 @@ mod tests {
         distr::{Uniform, Distribution}, 
         Rng
     };
-    use crate::{get_bit, get_repr_bit, get_bit_cnt};
+    use crate::{
+        get_bit, 
+        get_repr_bit,
+        bit_cluster
+    };
 
-    fn byte_collapsed_eq(v0: &[u8], v1: &[u8]) -> bool {
+    fn byte_compr_collapsed_eq(v0: &[u8], v1: &[u8]) -> bool {
         if v0.is_empty() ^ v1.is_empty() {
             return false;
         }
@@ -335,7 +368,7 @@ mod tests {
         i0 == v0.len() && i1 == v1.len()
     }
 
-    fn bit_collapsed_eq(v0: &[u8], v1: &[u8]) -> bool {
+    fn bit_compr_collapsed_eq(v0: &[u8], v1: &[u8]) -> bool {
         if v0.is_empty() ^ v1.is_empty() {
             return false;
         }
@@ -375,14 +408,16 @@ mod tests {
         i0 == v0.len() && i1 == v1.len()
     }
 
-    fn create_random_byte_data_file(fp: PathBuf) -> std::io::Result<(Vec<u8>, Vec<u8>)> {
+    fn random_byte_data_file(fp: PathBuf) 
+        -> std::io::Result<(Vec<u8>, Vec<u8>)> 
+    {
         let mut input_file = File::create(fp.clone())?;
 
         // Write random data to input_file 
         let mut rng = rand::rng();
-        let range = Uniform::new(1, 2).unwrap();
+        let range = Uniform::new(1, 16).unwrap();
 
-        let cluster_cnts = 2;
+        let cluster_cnts = 4096;
 
         let random_cnts: Vec<u8> = (0..cluster_cnts).map(|_| range.sample(&mut rng) as u8).collect();
         let mut random_bytes = vec![0u8; cluster_cnts];
@@ -412,11 +447,13 @@ mod tests {
         Ok((compress_output, decompress_output))
     }
 
-    fn create_random_bit_data_file(fp: PathBuf) -> std::io::Result<(Vec<u8>, Vec<u8>)> {
+    fn random_bit_data_file(fp: PathBuf) 
+        -> std::io::Result<(Vec<u8>, Vec<u8>)> 
+    {
         let mut input_file = File::create(fp.clone())?;
 
         let mut rng = rand::rng();
-        let cluster_cnts = 512;
+        let cluster_cnts = 4096;
         
         let mut compress_output = vec![0u8; cluster_cnts];
         rng.fill_bytes(&mut compress_output);
@@ -427,7 +464,9 @@ mod tests {
         let fill_bit_cnt = 8 - (total_bit_cnt % 8) as u8;
 
         if fill_bit_cnt > 0 {
-            let fill_bit = fill_bit_cnt | (0x80u8);
+            // create filler cluster to assert we got 
+            // file data size that is multiple of a byte.
+            let fill_bit = bit_cluster!(fill_bit_cnt, 1);
             compress_output.push(fill_bit);
         }
 
@@ -475,10 +514,10 @@ mod tests {
         let mut tmp_output_fp = PathBuf::from("assets");
         tmp_output_fp.push("tmp_bit_output_fp");
 
-        let (expect_output, _) = create_random_byte_data_file(tmp_input_fp.clone()).unwrap();
+        let (expect_output, _) = random_byte_data_file(tmp_input_fp.clone()).unwrap();
 
         let settings = FileCompressSettings {
-            chunk_size_hint: 512,
+            chunk_size_hint: 2048,
             compression_level: CompressorLevel::CompressorByteLevel,
         };
 
@@ -498,7 +537,7 @@ mod tests {
         compressed_file.read_to_end(&mut file_output)?;
         drop(compressed_file);
 
-        assert!(byte_collapsed_eq(&file_output, &expect_output), 
+        assert!(byte_compr_collapsed_eq(&file_output, &expect_output), 
                 "Byte-level compression is invalid");
 
         // Delete temporary files
@@ -517,10 +556,10 @@ mod tests {
         tmp_output_fp.push("tmp_byte_output_fp");
 
         let (compress_output, _decompess_output) = 
-            create_random_bit_data_file(tmp_input_fp.clone()).unwrap();
+            random_bit_data_file(tmp_input_fp.clone()).unwrap();
 
         let settings = FileCompressSettings {
-            chunk_size_hint: 512,
+            chunk_size_hint: 2048,
             compression_level: CompressorLevel::CompressorBitLevel,
         };
 
@@ -540,7 +579,7 @@ mod tests {
         compressed_file.read_to_end(&mut file_output)?;
         drop(compressed_file);
 
-        assert!(bit_collapsed_eq(&file_output, &compress_output), 
+        assert!(bit_compr_collapsed_eq(&file_output, &compress_output), 
                 "Bit-level compression is invalid");
 
         // Delete temporary files
@@ -562,10 +601,10 @@ mod tests {
         tmp_final_output_fp.push("tmp_byte_final_output_fp_cd");
 
         let (_compress_output, decompress_output)= 
-            create_random_byte_data_file(tmp_input_fp.clone()).unwrap();
+            random_byte_data_file(tmp_input_fp.clone()).unwrap();
             
         let settings = FileCompressSettings {
-            chunk_size_hint: 8,
+            chunk_size_hint: 2048,
             compression_level: CompressorLevel::CompressorByteLevel,
         };
 
@@ -609,10 +648,10 @@ mod tests {
         tmp_final_output_fp.push("tmp_bit_final_output_fp_cd");
 
         let (_compress_output, decompress_output)= 
-            create_random_bit_data_file(tmp_input_fp.clone()).unwrap();
+            random_bit_data_file(tmp_input_fp.clone()).unwrap();
 
         let settings = FileCompressSettings {
-            chunk_size_hint: 8,
+            chunk_size_hint: 2048,
             compression_level: CompressorLevel::CompressorBitLevel,
         };
 
