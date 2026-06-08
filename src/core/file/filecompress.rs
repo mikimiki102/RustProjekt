@@ -1,7 +1,3 @@
-use std::fs::{
-    File, 
-    OpenOptions
-};
 use std::sync::mpsc;
 use std::path::PathBuf;
 use crate::get_bit_cnt;
@@ -12,6 +8,10 @@ use std::io::{
     Seek, 
     SeekFrom, 
     ErrorKind
+};
+use std::fs::{
+    File, 
+    OpenOptions
 };
 
 fn get_bytes_left(file: &mut File) -> std::io::Result<u64> {

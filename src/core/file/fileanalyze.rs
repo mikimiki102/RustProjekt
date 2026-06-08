@@ -1,7 +1,11 @@
 use super::filecompress::CompressorLevel;
-use std::io::{Read, Seek, SeekFrom};
 use crate::get_bit;
 use std::path::PathBuf;
+use std::io::{
+    Read, 
+    Seek, 
+    SeekFrom
+};
 use std::sync::atomic::{
     AtomicU32, 
     Ordering

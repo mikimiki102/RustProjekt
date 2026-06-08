@@ -1,11 +1,11 @@
-use crate::core::file::filecompress::{
-    FileCompressPipeline, 
-    FileCompressSettings
-};
 use std::io::Write;
 use super::fileanalyze::FileAnalyzer;
 use super::filecompress::FileCompressor;
 use std::fs::File;
+use crate::core::file::filecompress::{
+    FileCompressPipeline, 
+    FileCompressSettings
+};
 
 #[derive(Debug, Clone)]
 pub struct FileFormaterHints {
@@ -34,6 +34,10 @@ impl FileFormater {
         }
     }
 
+    /* That is final abstraction layer of  the compression workflow.
+     * Specify optional 'compressor_hints' for custom workmode, or None for default behaviour.
+     * Output file: 'pipeline.output' is expected to be non-existent.
+     */
     pub fn file_compress(&self, 
                          pipeline: &FileCompressPipeline, 
                          compressor_hints: Option<FileFormaterHints>) 
@@ -66,6 +70,9 @@ impl FileFormater {
         compressor.compress_input_to_output(&pipeline);
     }
 
+    /* That is final abstraction layer of decompression workflow.
+     * Specify optional 'compressor_hints' for custom workmode, or None for default behaviour.
+     */
     pub fn file_decompress(&self, 
                            pipeline: &FileCompressPipeline, 
                            compressor_hits: Option<FileFormaterHints>) 
@@ -79,7 +86,9 @@ impl FileFormater {
 mod tests {
     use super::*;
     use crate::core::file::fileanalyze::FileAnalyzerSettings;
-    use std::fs::{self};
+    use std::fs::{
+        self
+    };
     use std::path::PathBuf;
     use std::io::Read;
     use crate::core::file::filecompress::CompressorLevel;
