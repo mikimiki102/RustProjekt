@@ -3,6 +3,7 @@ use std::fs;
 use std::process;
 pub mod core;
 use core::memcompress::{byte_level_compress, byte_level_decompress};
+//use core::file::fileformat;
 
 fn main() {
     let args: Vec<String> = env::args().collect();

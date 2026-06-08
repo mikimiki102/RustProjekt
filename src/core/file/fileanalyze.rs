@@ -1,4 +1,5 @@
 use super::filecompress::CompressorLevel;
+use std::io::{Read, Seek, SeekFrom};
 use crate::get_bit;
 use std::path::PathBuf;
 use std::sync::atomic::{
@@ -9,17 +10,16 @@ use std::fs::{
     self, 
     File
 };
-use std::io::Read;
 
 #[derive(Debug, Clone)]
 pub struct FileAnalyzerSettings {
-    probe_chunk_size: usize,
-    thread_cnt: usize,
+    pub probe_chunk_size: usize,
+    pub thread_cnt: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FileAnalyzer {
-    settings: FileAnalyzerSettings
+    pub settings: FileAnalyzerSettings
 }
 
 impl FileAnalyzer {
@@ -107,10 +107,10 @@ impl FileAnalyzer {
         total_bit_cnt as f32 / total_cluster_cnt as f32
     }
 
-    pub fn get_suggested_compression(&self, fp: PathBuf) 
+    pub fn get_suggested_compression(&self, fp: &PathBuf) 
         -> std::io::Result<Option<CompressorLevel>> 
     {
-        let mut file = File::open(&fp)?;
+        let mut file = File::open(fp)?;
 
         let total_file_size = fs::metadata(fp)?.len() as usize;
 
@@ -127,7 +127,7 @@ impl FileAnalyzer {
         let byte_compression_coeff = self.get_byte_compression_coeff(&probe_chunk);
         let bit_compression_coeff = self.get_bit_compression_coeff(&probe_chunk);
 
-        println!("{} {}", byte_compression_coeff, bit_compression_coeff);
+        file.seek(SeekFrom::Start(0))?;
 
         if byte_compression_coeff > bit_compression_coeff {
             return Ok(Some(CompressorLevel::CompressorByteLevel));
@@ -193,7 +193,7 @@ mod tests {
         let settings = get_test_settings(512, 2);
         let analyzer = FileAnalyzer::new(&settings);
 
-        let result = analyzer.get_suggested_compression(fp.clone()).unwrap();
+        let result = analyzer.get_suggested_compression(&fp).unwrap();
         let _ = std::fs::remove_file(&fp);
 
         assert_eq!(result, Some(CompressorLevel::CompressorByteLevel));
@@ -211,7 +211,7 @@ mod tests {
         let settings = get_test_settings(512, 2);
         let analyzer = FileAnalyzer::new(&settings);
 
-        let result = analyzer.get_suggested_compression(fp.clone()).unwrap();
+        let result = analyzer.get_suggested_compression(&fp).unwrap();
         let _ = std::fs::remove_file(&fp);
 
         assert_eq!(result, Some(CompressorLevel::CompressorBitLevel));
@@ -223,7 +223,7 @@ mod tests {
         let settings = get_test_settings(1024, 2);
         let analyzer = FileAnalyzer::new(&settings);
 
-        let result = analyzer.get_suggested_compression(fp.clone()).unwrap();
+        let result = analyzer.get_suggested_compression(&fp).unwrap();
         let _ = std::fs::remove_file(&fp);
 
         assert_eq!(result, None);
@@ -235,7 +235,7 @@ mod tests {
         let settings = get_test_settings(1000, 2);
         let analyzer = FileAnalyzer::new(&settings);
 
-        let result = analyzer.get_suggested_compression(fp.clone());
+        let result = analyzer.get_suggested_compression(&fp);
         let _ = std::fs::remove_file(&fp);
 
         assert!(result.is_ok());
@@ -247,7 +247,7 @@ mod tests {
         let analyzer = FileAnalyzer::new(&settings);
         
         let result = analyzer.get_suggested_compression(
-            PathBuf::from("assets/non_existent_file_12345")
+            &PathBuf::from("assets/non_existent_file_12345")
         );
         
         assert!(result.is_err());

@@ -1,4 +1,7 @@
-use std::fs::File;
+use std::fs::{
+    File, 
+    OpenOptions
+};
 use std::sync::mpsc;
 use std::path::PathBuf;
 use crate::get_bit_cnt;
@@ -63,6 +66,16 @@ impl CompressorLevel {
                 FileCompressor::byte_buf_reader,
         }
     }
+
+    pub fn get_marker_value(&self) -> u8 {
+        match self {
+            CompressorLevel::CompressorBitLevel => 
+                0x00u8,
+
+            CompressorLevel::CompressorByteLevel => 
+                0xFFu8,
+        }
+    }
 }
 
 /* Specify input file and output file for the compressor.
@@ -78,7 +91,6 @@ pub struct FileCompressPipeline {
  * Increasing 'chunk_size_hint' might increase performance
  * while compressing big files, but setting it to high value
  * might be an overkill for just small files.
- * 'compressor_level' stands for compression mode, either bit or byte compression.
  */
 
 #[derive(Debug, Clone)]
@@ -91,7 +103,7 @@ pub struct FileCompressSettings {
  * It implements 'compress_input_to_output', that do the actual stuff.
  */
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FileCompressor {
     pub settings: FileCompressSettings,  
 }
@@ -266,8 +278,11 @@ impl FileCompressor {
         });
 
         // We take care of writing to file in main thread.
-
-        let output_file = match File::create(&output_path) {
+        let output_file = match OpenOptions::new()
+                                        .write(true)
+                                        .append(true) 
+                                        .create(true)
+                                        .open(&output_path) {
             Ok(f) => f,
             Err(e) => {
                 eprintln!("Couldn't create output file: {e}");
