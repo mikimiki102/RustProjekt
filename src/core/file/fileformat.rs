@@ -1,10 +1,12 @@
-use std::io::Write;
 use super::fileanalyze::FileAnalyzer;
 use super::filecompress::FileCompressor;
 use std::fs::File;
 use crate::core::file::filecompress::{
-    FileCompressPipeline, 
-    FileCompressSettings
+    CompressorLevel, FileCompressPipeline, FileCompressSettings
+};
+use std::io::{
+    Write, 
+    Read
 };
 
 #[derive(Debug, Clone)]
@@ -75,11 +77,29 @@ impl FileFormater {
      */
     pub fn file_decompress(&self, 
                            pipeline: &FileCompressPipeline, 
-                           compressor_hits: Option<FileFormaterHints>) 
+                           decompressor_hints: Option<FileFormaterHints>) 
     {
-        // TODO
-    }
+        let input_fp = &pipeline.input;
 
+        let decompressor_hints = decompressor_hints.unwrap_or(FileFormaterHints::default());
+        let chunk_size_hint = decompressor_hints.chunk_size_hint;
+
+        let mut input_file = File::open(&input_fp).expect("Failed to open input file");
+        let mut header_buf = [0u8; 1];
+        input_file.read_exact(&mut header_buf).expect("Failed to read header byte");
+        let compression_level = CompressorLevel::from_value(header_buf[0])
+                                                    .expect("Invalid header markers - file is not compressed");
+
+        let compressor = FileCompressor::new(
+            &FileCompressSettings {
+                chunk_size_hint: chunk_size_hint,
+                compression_level: compression_level.clone()
+            }
+        );
+
+        compressor.decompress_input_to_output(&pipeline);
+        drop(input_file);
+    }
 }
 
 #[cfg(test)]

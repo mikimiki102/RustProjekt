@@ -76,6 +76,17 @@ impl CompressorLevel {
                 0xFFu8,
         }
     }
+
+    pub fn from_value(v: u8) -> Option<Self> {
+        if v == CompressorLevel::CompressorBitLevel.get_marker_value() {
+            return Some(CompressorLevel::CompressorBitLevel);
+        }
+        else if v == CompressorLevel::CompressorByteLevel.get_marker_value() {
+            return Some(CompressorLevel::CompressorByteLevel);
+        }
+        
+        None
+    }
 }
 
 /* Specify input file and output file for the compressor.
@@ -331,7 +342,10 @@ impl FileCompressor {
 mod tests {
     use super::*;
     use rand::{
-        distr::{Uniform, Distribution}, 
+        distr::{
+            Uniform, 
+            Distribution
+        }, 
         Rng
     };
     use crate::{

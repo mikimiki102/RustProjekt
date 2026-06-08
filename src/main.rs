@@ -13,8 +13,8 @@ fn main() {
     if args.len() != 4 {
         eprintln!("Usage: cargo run --<mode[required]> <input_file[required]> <output_file[required]>");
         eprintln!("Examples:");
-        eprintln!("  cargo run --compress input output.rl");
-        eprintln!("  cargo run --decompress input.rl output");
+        eprintln!("  cargo run --compress input output.rle");
+        eprintln!("  cargo run --decompress input.rle output");
         process::exit(1);
     }
 
