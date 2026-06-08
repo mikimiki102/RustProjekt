@@ -1,5 +1,11 @@
+//! File: filecompress.rs.
+//! 
+//! Provides [`FileCompressor`] structure for either compressing 
+//! or decompressing given input file to output file.
+//! Input and output files are specified via [`FileCompressPipeline`].
+
 use std::sync::mpsc;
-use crate::get_bit_cnt;
+use crate::get_bit_cnt_u8;
 use std::fs::File;
 use std::io::{
     BufWriter, 
@@ -18,20 +24,16 @@ fn get_bytes_left(file: &mut File) -> std::io::Result<u64> {
     Ok(bytes_left)
 }
 
-/* Compressor mode specifier.
- * Compressing either bits, or bytes.
- */
-
+/// Compressor mode specifier.
+/// Compressing either bits, or bytes.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompressorLevel {
     CompressorBitLevel,
     CompressorByteLevel,
 }
 
-/* Differentiate between different
- * internal functions while parsing and compressing a file.
- */
-
+/// Differentiate between different
+/// internal functions while parsing and compressing a file.
 impl CompressorLevel {
     pub fn get_compressor_fn(&self) -> fn(&[u8]) -> Vec<u8> {
         match self {
@@ -85,31 +87,25 @@ impl CompressorLevel {
     }
 }
 
-/* Specify input file and output file for the compressor.
- */
-
+/// Specify input file and output file for the compressor.
 #[derive(Debug)]
 pub struct FileCompressPipeline<'a> {
     pub input: &'a mut File,
     pub output: &'a mut File,
 }
 
-/* Specify compressing settings.
- * Increasing 'chunk_size_hint' might increase performance
- * while compressing big files, but setting it to high value
- * might be an overkill for just small files.
- */
-
+/// Specify compressing settings.
+/// Increasing `chunk_size_hint` might increase performance
+/// while compressing big files, but setting it to high value
+/// might be an overkill for just small files.
 #[derive(Debug, Clone)]
 pub struct FileCompressSettings {
     pub chunk_size_hint: usize,
     pub compression_level: CompressorLevel,
 }
 
-/* That is core compressor.
- * It implements 'compress_input_to_output', that do the actual stuff.
- */
-
+/// That is core compressor.
+/// It implements `compress_input_to_output`, that do the actual stuff.
 #[derive(Debug, Clone)]
 pub struct FileCompressor {
     pub settings: FileCompressSettings,  
@@ -156,7 +152,7 @@ impl FileCompressor {
             match file.read_exact(&mut one_byte_buf) {
                 Ok(()) => {
                     let byte = one_byte_buf[0];
-                    total_bit_cnt += get_bit_cnt!(byte) as usize;
+                    total_bit_cnt += get_bit_cnt_u8!(byte) as usize;
 
                     buffer.push(byte);
 
@@ -317,7 +313,7 @@ impl FileCompressor {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::fs::File;
@@ -330,9 +326,9 @@ mod tests {
         Rng
     };
     use crate::{
-        get_bit, 
-        get_repr_bit,
-        bit_cluster
+        get_bit_u8, 
+        get_repr_bit_u8,
+        bit_cluster_u8
     };
 
     fn byte_compr_collapsed_eq(v0: &[u8], v1: &[u8]) -> bool {
@@ -390,8 +386,8 @@ mod tests {
         let mut i1: usize = 0;
 
         while i0 < v0.len() && i1 < v1.len() {
-            let v0_bit = get_repr_bit!(v0[i0]);
-            let v1_bit = get_repr_bit!(v1[i1]);
+            let v0_bit = get_repr_bit_u8!(v0[i0]);
+            let v1_bit = get_repr_bit_u8!(v1[i1]);
 
             if v0_bit != v1_bit {
                 return false;
@@ -400,13 +396,13 @@ mod tests {
             let mut v0_cnt: usize = 0;
             let mut v1_cnt: usize = 0;
 
-            while i0 < v0.len() && get_repr_bit!(v0[i0]) == v0_bit {
-                v0_cnt += get_bit_cnt!(v0[i0]) as usize;
+            while i0 < v0.len() && get_repr_bit_u8!(v0[i0]) == v0_bit {
+                v0_cnt += get_bit_cnt_u8!(v0[i0]) as usize;
                 i0 += 1;
             }
 
-            while i1 < v1.len() && get_repr_bit!(v1[i1]) == v1_bit {
-                v1_cnt += get_bit_cnt!(v1[i1]) as usize;
+            while i1 < v1.len() && get_repr_bit_u8!(v1[i1]) == v1_bit {
+                v1_cnt += get_bit_cnt_u8!(v1[i1]) as usize;
                 i1 += 1;
             }
 
@@ -418,7 +414,7 @@ mod tests {
         i0 == v0.len() && i1 == v1.len()
     }
 
-    fn random_byte_data_file(fp: PathBuf) 
+    pub fn random_byte_data_file(fp: PathBuf) 
         -> std::io::Result<(Vec<u8>, Vec<u8>)> 
     {
         let mut input_file = File::create(fp.clone())?;
@@ -469,19 +465,19 @@ mod tests {
         rng.fill_bytes(&mut compress_output);
 
         let mut total_bit_cnt = 0;
-        compress_output.iter().for_each(|&x| total_bit_cnt += get_bit_cnt!(x) as usize);
+        compress_output.iter().for_each(|&x| total_bit_cnt += get_bit_cnt_u8!(x) as usize);
 
         let fill_bit_cnt = 8 - (total_bit_cnt % 8) as u8;
 
         if fill_bit_cnt > 0 {
             // create filler cluster to assert we got 
             // file data size that is multiple of a byte.
-            let fill_bit = bit_cluster!(fill_bit_cnt, 1);
+            let fill_bit = bit_cluster_u8!(fill_bit_cnt, 1);
             compress_output.push(fill_bit);
         }
 
         // Remove bytes where count of bits is zero
-        compress_output.retain(|&x| get_bit_cnt!(x) > 0);
+        compress_output.retain(|&x| get_bit_cnt_u8!(x) > 0);
 
         // Write data to tmp_input_file
         let mut decompress_output = Vec::new();
@@ -489,8 +485,8 @@ mod tests {
         let mut curr_shf = 0u8;
 
         for &cluster in &compress_output {
-            let cnt = get_bit_cnt!(cluster);
-            let bit = get_repr_bit!(cluster);
+            let cnt = get_bit_cnt_u8!(cluster);
+            let bit = get_repr_bit_u8!(cluster);
 
             for _ in 0..cnt {
                 curr_byte |= bit << curr_shf;

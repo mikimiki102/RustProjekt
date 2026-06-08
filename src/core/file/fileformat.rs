@@ -1,3 +1,9 @@
+//! File: fileformat.rs.
+//! 
+//! Provides [`FileFormater`] structure for final compressing
+//! or decompressing an input file to output.
+//! Specify data flow using [`FileFormaterPipeline`].
+
 use super::fileanalyze::FileAnalyzer;
 use super::filecompress::FileCompressor;
 use std::path::PathBuf;
@@ -48,10 +54,9 @@ impl FileFormater {
         }
     }
 
-    /* That is final abstraction layer of  the compression workflow.
-     * Specify optional 'compressor_hints' for custom workmode, or None for default behaviour.
-     * Output file: 'pipeline.output' is expected to be non-existent.
-     */
+    /// That is final abstraction layer of  the compression workflow.
+    /// Specify optional `compressor_hints` for custom workmode, or `None` for default behaviour.
+    /// Output file: `pipeline.output` is expected to be non-existent.
     pub fn file_compress(&self, 
                          pipeline: &FileFormaterPipeline, 
                          compressor_hints: Option<FileFormaterHints>) 
@@ -71,7 +76,6 @@ impl FileFormater {
             }
         );
 
-        // Mark compression mode in the output file
         let mut output_file = match OpenOptions::new()
                                             .write(true)
                                             .append(true) 
@@ -107,9 +111,8 @@ impl FileFormater {
         drop(output_file);
     }
 
-    /* That is final abstraction layer of decompression workflow.
-     * Specify optional 'compressor_hints' for custom workmode, or None for default behaviour.
-     */
+    /// That is final abstraction layer of decompression workflow.
+    /// Specify optional `compressor_hints` for custom workmode, or `None` for default behaviour.
     pub fn file_decompress(&self, 
                            pipeline: &FileFormaterPipeline, 
                            decompressor_hints: Option<FileFormaterHints>) 
@@ -165,22 +168,22 @@ impl FileFormater {
 mod tests {
     use super::*;
     use crate::core::file::fileanalyze::FileAnalyzerSettings;
-    use std::fs::{
-        self
-    };
-    use std::path::PathBuf;
-    use std::io::Read;
     use crate::core::file::filecompress::CompressorLevel;
+    use std::fs;
+    use crate::core::file::filecompress::tests::random_byte_data_file;
+    use tempfile::NamedTempFile;
+    use std::io::{
+        Read, 
+        SeekFrom,
+        Seek
+    };
+    
+    fn create_test_file(data: &[u8]) -> NamedTempFile {
+        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
 
-    fn create_test_file(filename: &str, data: &[u8]) -> PathBuf {
-        let mut fp = PathBuf::from("assets");
-        let _ = fs::create_dir_all(&fp);
-        fp.push(filename);
-
-        let mut file = File::create(&fp).expect("Failed to create test input file");
         file.write_all(data).expect("Failed to write test data");
         file.flush().expect("Failed to flush test data");
-        fp
+        file
     }
 
     fn setup_formater(probe_size: usize, threads: usize) -> FileFormater {
@@ -202,9 +205,12 @@ mod tests {
     #[test]
     fn test_file_compress_writes_correct_header_and_triggers_compression() {
         let input_data = vec![0b1010_1010u8; 100];
-        
-        let input_fp = create_test_file("formatter_input_byte", &input_data);
-        let output_fp = PathBuf::from("assets").join("formatter_output_byte");
+
+        let input = create_test_file(&input_data);
+        let input_fp = input.path().to_path_buf();
+
+        let output = NamedTempFile::new().expect("Failed to create temporary file");
+        let output_fp = output.path().to_path_buf();
 
         let pipeline = FileFormaterPipeline {
             input_fp: input_fp.clone(),
@@ -225,17 +231,19 @@ mod tests {
 
         let mut compressed_data = Vec::new();
         output_file.read_to_end(&mut compressed_data).expect("Failed to read compressed payload");
-        assert!(!compressed_data.is_empty(), "Empty file data apart from header marker");
 
-        let _ = fs::remove_file(&input_fp);
-        let _ = fs::remove_file(&output_fp);
+        assert!(!compressed_data.is_empty(), "Empty file data apart from header marker");
     }
 
     #[test]
     fn test_file_compress_with_custom_hints() {
         let input_data = vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
-        let input_fp = create_test_file("formatter_input_custom", &input_data);
-        let output_fp = PathBuf::from("assets").join("formatter_output_custom");
+
+        let input = create_test_file(&input_data);
+        let input_fp = input.path().to_path_buf();
+
+        let output = NamedTempFile::new().expect("Failed to create temporary file");
+        let output_fp = output.path().to_path_buf();
 
         let pipeline = FileFormaterPipeline {
             input_fp: input_fp.clone(),
@@ -249,20 +257,79 @@ mod tests {
 
         let metadata = fs::metadata(&output_fp).expect("Output file was not created");
         assert!(metadata.len() > 0);
-
-        let _ = fs::remove_file(&input_fp);
-        let _ = fs::remove_file(&output_fp);
     }
 
     #[test]
     #[should_panic]
     fn test_file_compress_panic_on_non_existent_input() {
+        let tmp_input_file = NamedTempFile::new().unwrap();
+        let tmp_output_file = NamedTempFile::new().unwrap();
+
+        let tmp_input_fp = tmp_input_file.path().to_path_buf();
+        let tmp_output_fp = tmp_output_file.path().to_path_buf();
+
         let pipeline = FileFormaterPipeline {
-            input_fp: PathBuf::from("assets/ghost_file_that_does_not_exist"),
-            output_fp: PathBuf::from("assets/ghost_output"),
+            input_fp: tmp_input_fp,
+            output_fp: tmp_output_fp,
         };
 
         let formater = setup_formater(512, 2);
         formater.file_compress(&pipeline, None);
+    }
+
+    #[test]
+    fn test_file_compress_decompress() -> std::io::Result<()> {        
+        let tmp_input_file = NamedTempFile::new()?;
+        let mut tmp_output_file = NamedTempFile::new()?;
+        let mut tmp_final_output_file = NamedTempFile::new()?;
+
+        let tmp_input_fp = tmp_input_file.path().to_path_buf();
+        let tmp_output_fp = tmp_output_file.path().to_path_buf();
+        let tmp_final_output_fp = tmp_final_output_file.path().to_path_buf();
+
+        let (_compress_output, decompress_output)= 
+            random_byte_data_file(tmp_input_fp.clone()).unwrap();
+            
+        let analyzer_settings = FileAnalyzerSettings {
+            probe_chunk_size: 2048,
+            thread_cnt: 2
+        };
+
+        let analyzer= FileAnalyzer::new(&analyzer_settings);
+
+        let tmp_output = tmp_output_file.as_file_mut();
+        let tmp_final_output = tmp_final_output_file.as_file_mut();
+
+        let formater = FileFormater::new(&analyzer);
+        let formater_hints = FileFormaterHints {
+            chunk_size_hint: 2048
+        };
+        
+        formater.file_compress(
+            &FileFormaterPipeline { 
+                input_fp: tmp_input_fp.clone(), 
+                output_fp: tmp_output_fp.clone()
+            }, 
+            Some(formater_hints.clone())
+        );
+
+        tmp_output.seek(SeekFrom::Start(0))?;
+
+        formater.file_decompress(
+            &FileFormaterPipeline { 
+                input_fp: tmp_output_fp.clone(), 
+                output_fp: tmp_final_output_fp .clone()
+            }, 
+            Some(formater_hints)
+        );
+
+        tmp_final_output.seek(SeekFrom::Start(0))?;
+        let mut result = Vec::new();
+
+        let _ = tmp_final_output.read_to_end(&mut result);
+
+        assert_eq!(result, decompress_output);
+
+        Ok(())
     }
 }

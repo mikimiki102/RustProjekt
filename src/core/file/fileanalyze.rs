@@ -1,5 +1,12 @@
+//! File: fileanalyze.rs.
+//! 
+//! Provides [`FileAnalyzer`] structure for analyzing file structure
+//! and finally suggesting efficient compression for input file.
+//!
+//! See [`FileAnalyzer::get_suggested_compression`] for obtaining suggested compression.
+
 use super::filecompress::CompressorLevel;
-use crate::get_bit;
+use crate::get_bit_u8;
 use std::path::PathBuf;
 use std::io::{
     Read, 
@@ -15,6 +22,7 @@ use std::fs::{
     File
 };
 
+/// Specify settings of [`FileAnalyzer`]
 #[derive(Debug, Clone)]
 pub struct FileAnalyzerSettings {
     pub probe_chunk_size: usize,
@@ -62,13 +70,13 @@ impl FileAnalyzer {
                             total_cluster_cnt.fetch_add(1, Ordering::Relaxed);
                         }
                     }
-                });
+                }); // s.spawn
 
                 handles.push(handle);
             }
-        });
+        }); // std::thread::scope
 
-        let total_cluster_cnt = total_cluster_cnt.load(Ordering::Relaxed);
+        let total_cluster_cnt = total_cluster_cnt.load(Ordering::Acquire);
         probe_chunk.len() as f32 / total_cluster_cnt as f32
     }
 
@@ -86,13 +94,13 @@ impl FileAnalyzer {
                 let chunk_slice = &probe_chunk[begin..end];
 
                 let handle = s.spawn(|| {
-                    let mut curr_bit = get_bit!(chunk_slice[0], 0);
+                    let mut curr_bit = get_bit_u8!(chunk_slice[0], 0);
 
                     for i in 0..chunk_slice.len() {
                         let byte = chunk_slice[i];
 
                         for shf in 0..8 {
-                            let bit = get_bit!(byte, shf);
+                            let bit = get_bit_u8!(byte, shf);
 
                             if bit != curr_bit {
                                 curr_bit = bit;
@@ -100,17 +108,19 @@ impl FileAnalyzer {
                             }
                         }
                     }
-                });
+                }); // s.spawn
 
                 handles.push(handle);
             }
-        });
+        }); // std::thread::scope
 
-        let total_cluster_cnt = total_cluster_cnt.load(Ordering::Relaxed);
+        let total_cluster_cnt = total_cluster_cnt.load(Ordering::Acquire);
         let total_bit_cnt = probe_chunk.len() * 8;
         total_bit_cnt as f32 / total_cluster_cnt as f32
     }
 
+    /// Returns wrapped `Some` [`CompressorLevel`] for given filepath `fp`.
+    /// When error occured, returns `None`.
     pub fn get_suggested_compression(&self, fp: &PathBuf) 
         -> std::io::Result<Option<CompressorLevel>> 
     {
@@ -146,16 +156,14 @@ impl FileAnalyzer {
 mod tests {
     use super::*;
     use std::io::Write;
+    use tempfile::NamedTempFile;
     
-    fn create_test_file(filename: &str, data: &[u8]) -> PathBuf {
-        let mut fp = PathBuf::from("assets");
-        let _ = std::fs::create_dir_all(&fp);
-        fp.push(filename);
+    fn create_test_file(data: &[u8]) -> NamedTempFile {
+        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
 
-        let mut file = File::create(&fp).expect("Can't create file");
         file.write_all(data).expect("Write-all error");
         file.flush().expect("Flushing error");
-        fp
+        file
     }
 
     fn get_test_settings(probe_size: usize, threads: usize) 
@@ -193,7 +201,8 @@ mod tests {
     fn test_suggests_byte_level_for_long_byte_repeats() {
         let data = vec![0b1010_1010u8; 100];
 
-        let fp = create_test_file("tmp_analyzer_byte_test", &data);
+        let file = create_test_file(&data);
+        let fp = file.path().to_path_buf();
         let settings = get_test_settings(512, 2);
         let analyzer = FileAnalyzer::new(&settings);
 
@@ -211,7 +220,8 @@ mod tests {
             data.push(0b0000_1111); 
         }
 
-        let fp = create_test_file("tmp_analyzer_bit_test", &data);
+        let file = create_test_file(&data);
+        let fp = file.path().to_path_buf();
         let settings = get_test_settings(512, 2);
         let analyzer = FileAnalyzer::new(&settings);
 
@@ -223,7 +233,8 @@ mod tests {
 
     #[test]
     fn test_handling_empty_file() {
-        let fp = create_test_file("tmp_analyzer_empty_test", &[]);
+        let file = create_test_file(&[]);
+        let fp = file.path().to_path_buf();
         let settings = get_test_settings(1024, 2);
         let analyzer = FileAnalyzer::new(&settings);
 
@@ -235,7 +246,8 @@ mod tests {
 
     #[test]
     fn test_file_smaller_than_probe_chunk_size() {
-        let fp = create_test_file("tmp_analyzer_small_test", &[1, 1, 2, 2]);
+        let file = create_test_file(&[1, 1, 2, 2]);
+        let fp = file.path().to_path_buf();
         let settings = get_test_settings(1000, 2);
         let analyzer = FileAnalyzer::new(&settings);
 

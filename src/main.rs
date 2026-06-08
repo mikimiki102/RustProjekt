@@ -5,7 +5,7 @@ pub mod core;
 
 // TEMPORARY
 use core::memcompress::{byte_level_compress, byte_level_decompress};
-//use core::file::fileformat;
+//use core::file::fileformat; // USE THAT
 
 fn main() {
     let args: Vec<String> = env::args().collect();

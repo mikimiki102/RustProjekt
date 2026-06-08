@@ -1,53 +1,63 @@
-/* 'byte_level_compress' and 'bit_level_compress' are functions
- *  for memory compressing.
- *  For proper file handling and compression, see file/filecompress.rs
- */
+//! File: memcompress.rs.
+//! 
+//! Functions for memory buffers compression.
+//!
+//! This module provides [`byte_level_compress`] and [`bit_level_compress`] 
+//! for handling in-memory data buffers.
+//!
+//! For proper file handling and streaming compression, see the 
+//! [`filecompress`](crate::core::file::filecompress) module.
 
 #[macro_export]
-macro_rules! get_bit {
-    ($byte:expr, $pos:expr) => {
-        (($byte) >> ($pos)) & 1u8
-    };
+macro_rules! get_bit_u8 {
+    ($byte:expr, $pos:expr) => 
+    { ((($byte) >> ($pos)) & 1u8) };
 }
-
 #[macro_export]
-macro_rules! get_repr_bit {
-    ($byte:expr) => {
-        (get_bit!($byte, 7))
-    };
+macro_rules! set_bit_as_u8 {
+    {$byte:expr, $bit:expr, $pos:expr} => 
+    { ($byte |= $bit << $pos) }
 }
-
 #[macro_export]
-macro_rules! get_bit_cnt {
-    ($byte:expr) => {
-        (($byte) & 0x7fu8)
-    };
+macro_rules! set_bit_u8 {
+    {$byte:expr, $pos:expr} => 
+    { set_bit_as_u8!(byte, 1, pos); }
 }
-
 #[macro_export]
-macro_rules! bit_cluster {
-    ($cnt:expr, $bit:expr) => {
-        (($cnt) | ($bit << 7))
-    };
+macro_rules! get_repr_bit_u8 {
+    ($byte:expr) => 
+    { (get_bit_u8!($byte, 7u8)) };
+}
+#[macro_export]
+macro_rules! get_bit_cnt_u8 {
+    ($byte:expr) => 
+    { (($byte) & 0x7fu8) };
+}
+#[macro_export]
+macro_rules! bit_cluster_u8 {
+    ($cnt:expr, $bit:expr) => 
+    { (($cnt) | ($bit << 7u8)) };
 }
 
-// We save count in entire byte.
-const BYTE_LV_CLUSTER_MAX_CNT: u8 = u8::MAX;    
+// We save incoming bytes repeating count in entire byte.
+const MAX_CNT_BYTE_LV_CLUSTER: u8 = u8::MAX;    
 // We save count in lower 7-bits of a byte, that is u8::MAX / 2 maximum.
-const BIT_LV_CLUSTER_MAX_CNT: u8 = u8::MAX / 2; 
+const MAX_CNT_BIT_LV_CLUSTER: u8 = u8::MAX / 2; 
 
-pub fn byte_level_compress(data: &[u8]) -> Vec<u8> {
+/// Returns compressed memory buffer using byte compression.
+pub fn byte_level_compress(buff: &[u8]) -> Vec<u8> {
     let mut result = Vec::new();
 
-    if data.is_empty() {
+    if buff.is_empty() {
         return result;
     }
 
-    let mut curr_byte = data[0];
-    let mut curr_cnt: u8 = 1;
+    let mut curr_byte = buff[0];
+    let mut curr_cnt = 1u8;
 
-    for &byte in &data[1..] {
-        if byte == curr_byte && curr_cnt < BYTE_LV_CLUSTER_MAX_CNT {
+    for &byte in &buff[1..] {
+        if byte == curr_byte && 
+           curr_cnt < MAX_CNT_BYTE_LV_CLUSTER {
             curr_cnt += 1;
         } 
         else {
@@ -65,25 +75,26 @@ pub fn byte_level_compress(data: &[u8]) -> Vec<u8> {
     result
 }
 
-pub fn bit_level_compress(data: &[u8]) -> Vec<u8> {
+/// Returns compressed memory buffer using bit compression.
+pub fn bit_level_compress(buff: &[u8]) -> Vec<u8> {
     let mut result = Vec::new();
 
-    if data.is_empty() {
+    if buff.is_empty() {
         return result;
     }
 
-    let mut curr_bit = get_bit!(data[0], 0);
-    let mut curr_cnt: u8 = 0;
+    let mut curr_bit = get_bit_u8!(buff[0], 0);
+    let mut curr_cnt = 0u8;
 
-    for byte in data {
-        for shf in 0..8 {
-            let bit = get_bit!(*byte, shf);
+    for byte in buff {
+        for shf in 0..8u8 {
+            let bit = get_bit_u8!(*byte, shf);
 
-            if bit == curr_bit && curr_cnt < BIT_LV_CLUSTER_MAX_CNT {
+            if bit == curr_bit && curr_cnt < MAX_CNT_BIT_LV_CLUSTER {
                 curr_cnt += 1;
             }
             else {
-                let cluster = bit_cluster!(curr_cnt, curr_bit);
+                let cluster = bit_cluster_u8!(curr_cnt, curr_bit);
                 result.push(cluster);
 
                 curr_bit = bit;
@@ -92,18 +103,20 @@ pub fn bit_level_compress(data: &[u8]) -> Vec<u8> {
         }
     }
 
-    let cluster = bit_cluster!(curr_cnt, curr_bit);
+    let cluster = bit_cluster_u8!(curr_cnt, curr_bit);
     result.push(cluster);
 
     result
 }
 
+/// Returns decompressed memory buffer that was compressed using byte compression.
 pub fn byte_level_decompress(data: &[u8]) -> Result<Vec<u8>, &str> {
     if data.len() % 2 != 0 {
         return Err("Invalid compressed file: bytes count is not even");
     }
 
-    let mut result = Vec::new();
+    let min_result_size = data.len() / 2;
+    let mut result = Vec::with_capacity(min_result_size);
 
     if data.is_empty() {
         return Ok(result);
@@ -121,6 +134,7 @@ pub fn byte_level_decompress(data: &[u8]) -> Result<Vec<u8>, &str> {
     Ok(result)
 }
 
+/// Returns decompressed memory buffer that was compressed using bit compression.
 pub fn bit_level_decompress(data: &[u8]) -> Result<Vec<u8>, &str> {
     let mut result = Vec::new();
 
@@ -130,16 +144,16 @@ pub fn bit_level_decompress(data: &[u8]) -> Result<Vec<u8>, &str> {
     
     result.push(0u8);
     let mut curr_shf = 0u8;
-    let mut total_cnt: usize = 0;
+    let mut total_cnt = 0usize;
 
     for (i, byte) in data.iter().enumerate() {
-        let count = get_bit_cnt!(byte);
-        let bit = get_repr_bit!(byte);
+        let count = get_bit_cnt_u8!(byte);
+        let bit = get_repr_bit_u8!(byte);
         total_cnt += count as usize;
 
         for j in 0..count {
             let prev = result.last_mut().unwrap();
-            *prev |= bit << curr_shf;
+            set_bit_as_u8!(*prev, bit, curr_shf);
             curr_shf += 1;
 
             if curr_shf >= 8 {
@@ -151,7 +165,9 @@ pub fn bit_level_decompress(data: &[u8]) -> Result<Vec<u8>, &str> {
         }
     }
 
-    assert!(total_cnt % 8 == 0, "Bit bufor is misaligned");
+    if total_cnt % 8 > 0 {
+        return Err("Bit bufor is misaligned");
+    }
 
     Ok(result)
 }
@@ -184,7 +200,6 @@ mod tests {
     fn test_byte_overflow_counter() {
         let input = vec![0xAA; 260];
         let result = byte_level_compress(&input);
-        
         assert_eq!(result, vec![255, 0xAA, 5, 0xAA]);
     }
 
