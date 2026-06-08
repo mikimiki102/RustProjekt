@@ -138,6 +138,8 @@ impl FileAnalyzer {
         let bytes_read = file.read(&mut probe_chunk)?;
         probe_chunk.truncate(bytes_read);
 
+        // That might be done faster, by calculating each coefficient concurrently, not 
+        // sequentially.
         let byte_compression_coeff = self.get_byte_compression_coeff(&probe_chunk);
         let bit_compression_coeff = self.get_bit_compression_coeff(&probe_chunk);
 

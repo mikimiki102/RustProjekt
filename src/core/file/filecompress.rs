@@ -242,51 +242,51 @@ impl FileCompressor {
                         }
                     }
                 }
-            });
+            }); // s.spawn
 
-        let transform_chunk_channel_size = 8;
+            let transform_chunk_channel_size = 8;
 
-        let (transform_sender, transform_receiver) = 
-            mpsc::sync_channel::<Vec<u8>>(transform_chunk_channel_size );
-        let (transform_msg_sender, transform_msg_receiver) = 
-            mpsc::sync_channel::<bool>(1);
+            let (transform_sender, transform_receiver) = 
+                mpsc::sync_channel::<Vec<u8>>(transform_chunk_channel_size );
+            let (transform_msg_sender, transform_msg_receiver) = 
+                mpsc::sync_channel::<bool>(1);
 
-        // Here, we transform thread according to policy function.
-        std::thread::spawn(move || {
-            
-            // Probe raw chunk buffer
-            while let Ok(chunk_buffer) = reader_receiver.recv() {
-                if transform_msg_receiver.try_recv().unwrap_or(false) {
-                    let _ = reader_msg_sender.send(true);
-                    break;
+            // Here, we transform thread according to policy function.
+            s.spawn(move || {
+                
+                // Probe raw chunk buffer
+                while let Ok(chunk_buffer) = reader_receiver.recv() {
+                    if transform_msg_receiver.try_recv().unwrap_or(false) {
+                        let _ = reader_msg_sender.send(true);
+                        break;
+                    }
+
+                    // Decompress raw chunk buffer using provided policy function
+                    let transform_buffer = transform_policy(&chunk_buffer);
+
+                    if transform_sender.send(transform_buffer).is_err() {
+                        let _ = reader_msg_sender.send(true);
+                        break;
+                    }
                 }
+            }); // s.spawn
 
-                // Decompress raw chunk buffer using provided policy function
-                let transform_buffer = transform_policy(&chunk_buffer);
+            // We take care of writing to file in main thread.
+            let output_file = pipeline.output;
 
-                if transform_sender.send(transform_buffer).is_err() {
-                    let _ = reader_msg_sender.send(true);
+            let mut writer = BufWriter::new(output_file);
+
+            while let Ok(compressed_buffer) = transform_receiver.recv() {            
+                if let Err(e) = writer.write_all(&compressed_buffer) {
+                    eprintln!("Error while writing to file: {e}");
                     break;
                 }
             }
-        });
 
-        // We take care of writing to file in main thread.
-        let output_file = pipeline.output;
+            let _ = transform_msg_sender.send(true);
+            let _ = writer.flush();
 
-        let mut writer = BufWriter::new(output_file);
-
-        while let Ok(compressed_buffer) = transform_receiver.recv() {            
-            if let Err(e) = writer.write_all(&compressed_buffer) {
-                eprintln!("Error while writing to file: {e}");
-                break;
-            }
-        }
-
-        let _ = transform_msg_sender.send(true);
-        let _ = writer.flush();
-
-        });
+        }); // std::thread::scope
     }
 
     pub fn compress_input_to_output(&self, pipeline: FileCompressPipeline<'_>) {
