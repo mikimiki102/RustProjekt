@@ -321,6 +321,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::fs::File;
+    use std::fs::OpenOptions;
     use rand::{
         distr::{
             Uniform, 
@@ -533,7 +534,12 @@ mod tests {
         let compressor = FileCompressor::new(&settings) ;
 
         let mut tmp_input = File::open(tmp_input_fp.clone())?;
-        let mut tmp_output = File::create(tmp_output_fp.clone())?;
+        let mut tmp_output = OpenOptions::new()
+                                    .read(true)
+                                    .write(true)
+                                    .create(true)
+                                    .truncate(true)
+                                    .open(&tmp_output_fp)?;
 
         // Actual compression
         compressor.compress_input_to_output(
@@ -543,11 +549,10 @@ mod tests {
         });
 
         // Check compression
-        //tmp_output.seek(SeekFrom::Start(0))?;
-        let mut tmp_output = File::open(tmp_input_fp.clone())?;
-
+        tmp_output.seek(SeekFrom::Start(0))?;
+        
         let mut file_output = Vec::new();
-
+        
         tmp_output.read_to_end(&mut file_output)?;
         
         drop(tmp_input);
@@ -582,7 +587,12 @@ mod tests {
         let compressor = FileCompressor::new(&settings);
 
         let mut tmp_input = File::open(tmp_input_fp.clone())?;
-        let mut tmp_output = File::create(tmp_output_fp.clone())?;
+        let mut tmp_output = OpenOptions::new()
+                                    .read(true)
+                                    .write(true)
+                                    .create(true)
+                                    .truncate(true)
+                                    .open(&tmp_output_fp)?;
 
         // Actual compression
         compressor.compress_input_to_output(
@@ -630,31 +640,44 @@ mod tests {
         let compressor = FileCompressor::new(&settings);
 
         let mut tmp_input = File::open(tmp_input_fp.clone())?;
-        let mut tmp_output = File::create(tmp_output_fp.clone())?;
-        let mut tmp_final_output = File::create(tmp_final_output_fp.clone())?;
+        let mut tmp_output = OpenOptions::new()
+                                            .read(true)
+                                            .write(true)
+                                            .create(true)
+                                            .truncate(true)
+                                            .open(tmp_output_fp.clone())?;
+        let mut tmp_final_output = OpenOptions::new()
+                                            .read(true)
+                                            .write(true)
+                                            .create(true)
+                                            .truncate(true)
+                                            .open(&tmp_final_output_fp)?;
 
         compressor.compress_input_to_output(
         FileCompressPipeline {
             input: &mut tmp_input,
             output: &mut tmp_output,
         });
+
+        tmp_output.seek(SeekFrom::Start(0))?;
+
         compressor.decompress_input_to_output(
         FileCompressPipeline {
             input: &mut tmp_output,
             output: &mut tmp_final_output,
         });
 
-        let mut input= File::open(&tmp_final_output_fp)?;
+        tmp_final_output.seek(SeekFrom::Start(0))?;
         let mut result = Vec::new();
 
-        let _ = input.read_to_end(&mut result);
-        drop(input);
-
-        assert_eq!(result, decompress_output);
+        let _ = tmp_final_output.read_to_end(&mut result);
+        drop(tmp_final_output);
 
         let _ = std::fs::remove_file(&tmp_input_fp);
         let _ = std::fs::remove_file(&tmp_output_fp);
         let _ = std::fs::remove_file(&tmp_final_output_fp);
+
+        assert_eq!(result, decompress_output);
 
         Ok(())
     }
@@ -681,14 +704,27 @@ mod tests {
         let compressor = FileCompressor::new(&settings);
 
         let mut tmp_input = File::open(tmp_input_fp.clone())?;
-        let mut tmp_output = File::create(tmp_output_fp.clone())?;
-        let mut tmp_final_output = File::create(tmp_final_output_fp.clone())?;
+        let mut tmp_output = OpenOptions::new()
+                                            .read(true)
+                                            .write(true)
+                                            .create(true)
+                                            .truncate(true)
+                                            .open(tmp_output_fp.clone())?;
+        let mut tmp_final_output = OpenOptions::new()
+                                            .read(true)
+                                            .write(true)
+                                            .create(true)
+                                            .truncate(true)
+                                            .open(&tmp_final_output_fp)?;
 
         compressor.compress_input_to_output(
         FileCompressPipeline {
             input: &mut tmp_input,
             output: &mut tmp_output,
         });
+
+        tmp_output.seek(SeekFrom::Start(0))?;
+
         compressor.decompress_input_to_output(
         FileCompressPipeline {
             input: &mut tmp_output,
