@@ -1,8 +1,14 @@
 use super::fileanalyze::FileAnalyzer;
 use super::filecompress::FileCompressor;
-use std::fs::File;
+use std::path::PathBuf;
+use std::fs::{
+    File, 
+    OpenOptions
+};
 use crate::core::file::filecompress::{
-    CompressorLevel, FileCompressPipeline, FileCompressSettings
+    CompressorLevel, 
+    FileCompressPipeline, 
+    FileCompressSettings
 };
 use std::io::{
     Write, 
@@ -24,6 +30,12 @@ impl FileFormaterHints {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct FileFormaterPipeline {
+    pub input_fp: PathBuf,
+    pub output_fp: PathBuf,
+}
+
 #[derive(Debug)]
 pub struct FileFormater {
     pub analyzer: FileAnalyzer
@@ -41,11 +53,11 @@ impl FileFormater {
      * Output file: 'pipeline.output' is expected to be non-existent.
      */
     pub fn file_compress(&self, 
-                         pipeline: &FileCompressPipeline, 
+                         pipeline: &FileFormaterPipeline, 
                          compressor_hints: Option<FileFormaterHints>) 
     {
-        let input_fp = &pipeline.input;
-        let output_fp = &pipeline.output;
+        let input_fp = &pipeline.input_fp;
+        let output_fp = &pipeline.output_fp;
 
         let compressor_hints = compressor_hints.unwrap_or(FileFormaterHints::default());
         let chunk_size_hint = compressor_hints.chunk_size_hint;
@@ -60,35 +72,77 @@ impl FileFormater {
         );
 
         // Mark compression mode in the output file
-        let mut output_file = File::create(output_fp)
-                                          .expect("Couldn't create output file");
+        let mut output_file = match OpenOptions::new()
+                                            .write(true)
+                                            .append(true) 
+                                            .create(true)
+                                            .open(&output_fp) {
+            Ok(f) => f,
+            Err(e) => {
+                panic!("Couldn't create output file: {e}");
+            }
+        };
         
         let header_byte = compression_level.get_marker_value();
 
         output_file.write_all(&[header_byte])
                    .expect("Failed to write header to file");
-        drop(output_file);
 
-        compressor.compress_input_to_output(&pipeline);
+        let mut input_file = match File::open(&input_fp) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("Couldn't open input file: {e}");
+                return;
+            }
+        };
+
+        let compressor_pipeline = FileCompressPipeline {
+            input: &mut input_file,
+            output: &mut output_file
+        };
+
+        compressor.compress_input_to_output(compressor_pipeline);
+
+        drop(input_file);
+        drop(output_file);
     }
 
     /* That is final abstraction layer of decompression workflow.
      * Specify optional 'compressor_hints' for custom workmode, or None for default behaviour.
      */
     pub fn file_decompress(&self, 
-                           pipeline: &FileCompressPipeline, 
+                           pipeline: &FileFormaterPipeline, 
                            decompressor_hints: Option<FileFormaterHints>) 
     {
-        let input_fp = &pipeline.input;
+        let input_fp = &pipeline.input_fp;
+        let output_fp = &pipeline.output_fp;
 
         let decompressor_hints = decompressor_hints.unwrap_or(FileFormaterHints::default());
         let chunk_size_hint = decompressor_hints.chunk_size_hint;
 
-        let mut input_file = File::open(&input_fp).expect("Failed to open input file");
+        let mut input_file = match File::open(&input_fp) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("Couldn't open input file: {e}");
+                return;
+            }
+        };
+        
         let mut header_buf = [0u8; 1];
         input_file.read_exact(&mut header_buf).expect("Failed to read header byte");
         let compression_level = CompressorLevel::from_value(header_buf[0])
                                                     .expect("Invalid header markers - file is not compressed");
+
+        let mut output_file = match OpenOptions::new()
+                                            .write(true)
+                                            .append(true) 
+                                            .create(true)
+                                            .open(&output_fp) {
+            Ok(f) => f,
+            Err(e) => {
+                panic!("Couldn't create output file: {e}");
+            }
+        };
 
         let compressor = FileCompressor::new(
             &FileCompressSettings {
@@ -97,7 +151,12 @@ impl FileFormater {
             }
         );
 
-        compressor.decompress_input_to_output(&pipeline);
+        let compressor_pipeline = FileCompressPipeline {
+            input: &mut input_file,
+            output: &mut output_file
+        };
+
+        compressor.decompress_input_to_output(compressor_pipeline);
         drop(input_file);
     }
 }
@@ -147,9 +206,9 @@ mod tests {
         let input_fp = create_test_file("formatter_input_byte", &input_data);
         let output_fp = PathBuf::from("assets").join("formatter_output_byte");
 
-        let pipeline = FileCompressPipeline {
-            input: input_fp.clone(),
-            output: output_fp.clone(),
+        let pipeline = FileFormaterPipeline {
+            input_fp: input_fp.clone(),
+            output_fp: output_fp.clone(),
         };
 
         let formater = setup_formater(512, 2);
@@ -178,9 +237,9 @@ mod tests {
         let input_fp = create_test_file("formatter_input_custom", &input_data);
         let output_fp = PathBuf::from("assets").join("formatter_output_custom");
 
-        let pipeline = FileCompressPipeline {
-            input: input_fp.clone(),
-            output: output_fp.clone(),
+        let pipeline = FileFormaterPipeline {
+            input_fp: input_fp.clone(),
+            output_fp: output_fp.clone(),
         };
 
         let formater = setup_formater(256, 1);
@@ -198,9 +257,9 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_file_compress_panic_on_non_existent_input() {
-        let pipeline = FileCompressPipeline {
-            input: PathBuf::from("assets/ghost_file_that_does_not_exist"),
-            output: PathBuf::from("assets/ghost_output"),
+        let pipeline = FileFormaterPipeline {
+            input_fp: PathBuf::from("assets/ghost_file_that_does_not_exist"),
+            output_fp: PathBuf::from("assets/ghost_output"),
         };
 
         let formater = setup_formater(512, 2);

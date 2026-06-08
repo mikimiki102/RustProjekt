@@ -1,17 +1,13 @@
 use std::sync::mpsc;
-use std::path::PathBuf;
 use crate::get_bit_cnt;
+use std::fs::File;
 use std::io::{
     BufWriter, 
+    ErrorKind, 
     Read, 
-    Write, 
     Seek, 
     SeekFrom, 
-    ErrorKind
-};
-use std::fs::{
-    File, 
-    OpenOptions
+    Write, 
 };
 
 fn get_bytes_left(file: &mut File) -> std::io::Result<u64> {
@@ -92,10 +88,10 @@ impl CompressorLevel {
 /* Specify input file and output file for the compressor.
  */
 
-#[derive(Debug, Clone)]
-pub struct FileCompressPipeline {
-    pub input: PathBuf,
-    pub output: PathBuf,
+#[derive(Debug)]
+pub struct FileCompressPipeline<'a> {
+    pub input: &'a mut File,
+    pub output: &'a mut File,
 }
 
 /* Specify compressing settings.
@@ -212,13 +208,10 @@ impl FileCompressor {
     }
 
     fn stream_input_to_output(&self, 
-                              pipeline: &FileCompressPipeline, 
+                              pipeline: FileCompressPipeline<'_>, 
                               mut buf_read_policy: impl BuffReaderTrait,
                               transform_policy: impl BuffTransformTrait) 
     {
-        let input_path = pipeline.input.clone();
-        let output_path = &pipeline.output;
-
         let read_chunk_channel_size = 8;
 
         let (reader_sender, reader_receiver) = 
@@ -231,35 +224,29 @@ impl FileCompressor {
         // and then send them to another thread.
         let settings = self.settings.clone();
 
-        std::thread::spawn(move || {
+        let file = pipeline.input;
 
-            // Open input file and handle errors
-            let mut file = match File::open(&input_path) {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!("Couldn't open input file: {e}");
-                    return;
-                }
-            };
+        std::thread::scope(|s| {
+            s.spawn(move || {
 
-            // Sequentially read next buffers with 'buf_read_policy'
-            while !reader_msg_receiver.try_recv().unwrap_or(false) {
-                match buf_read_policy(&mut file, &settings) {
-                    Ok(Some(buffer)) => {
-                        if reader_sender.send(buffer).is_err() {
+                // Sequentially read next buffers with 'buf_read_policy'
+                while !reader_msg_receiver.try_recv().unwrap_or(false) {
+                    match buf_read_policy(file, &settings) {
+                        Ok(Some(buffer)) => {
+                            if reader_sender.send(buffer).is_err() {
+                                break;
+                            }
+                        }
+                        Ok(None) => {
+                            break;
+                        }
+                        Err(e) => {
+                            eprintln!("Error while reading from file: {e}");
                             break;
                         }
                     }
-                    Ok(None) => {
-                        break;
-                    }
-                    Err(e) => {
-                        eprintln!("Error while reading from file: {e}");
-                        break;
-                    }
                 }
-            }
-        });
+            });
 
         let transform_chunk_channel_size = 8;
 
@@ -289,18 +276,7 @@ impl FileCompressor {
         });
 
         // We take care of writing to file in main thread.
-        let output_file = match OpenOptions::new()
-                                        .write(true)
-                                        .append(true) 
-                                        .create(true)
-                                        .open(&output_path) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("Couldn't create output file: {e}");
-                let _ = transform_msg_sender.send(true);
-                return;
-            }
-        };
+        let output_file = pipeline.output;
 
         let mut writer = BufWriter::new(output_file);
 
@@ -313,9 +289,11 @@ impl FileCompressor {
 
         let _ = transform_msg_sender.send(true);
         let _ = writer.flush();
+
+        });
     }
 
-    pub fn compress_input_to_output(&self, pipeline: &FileCompressPipeline) {
+    pub fn compress_input_to_output(&self, pipeline: FileCompressPipeline<'_>) {
         let compress_fn = self.settings.compression_level.get_compressor_fn();
         let buf_read_fn = self.settings.compression_level.get_reader_fn();
         
@@ -324,7 +302,7 @@ impl FileCompressor {
                                     compress_fn);
     }
 
-    pub fn decompress_input_to_output(&self, pipeline: &FileCompressPipeline) {
+    pub fn decompress_input_to_output(&self, pipeline: FileCompressPipeline<'_>) {
         let compression_level = self.settings.compression_level.clone();
         let buf_read_fn = self.settings.compression_level.get_reader_fn();
         let compress_fn = move |buffer: &[u8]| {
@@ -341,6 +319,8 @@ impl FileCompressor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::fs::File;
     use rand::{
         distr::{
             Uniform, 
@@ -550,28 +530,35 @@ mod tests {
             compression_level: CompressorLevel::CompressorByteLevel,
         };
 
-        let compressor = FileCompressor::new(&settings);
+        let compressor = FileCompressor::new(&settings) ;
+
+        let mut tmp_input = File::open(tmp_input_fp.clone())?;
+        let mut tmp_output = File::create(tmp_output_fp.clone())?;
 
         // Actual compression
         compressor.compress_input_to_output(
-        &FileCompressPipeline {
-            input: tmp_input_fp.clone(),
-            output: tmp_output_fp.clone(),
+        FileCompressPipeline {
+            input: &mut tmp_input,
+            output: &mut tmp_output,
         });
 
         // Check compression
-        let mut compressed_file = File::open(&tmp_output_fp)?;
+        //tmp_output.seek(SeekFrom::Start(0))?;
+        let mut tmp_output = File::open(tmp_input_fp.clone())?;
+
         let mut file_output = Vec::new();
 
-        compressed_file.read_to_end(&mut file_output)?;
-        drop(compressed_file);
+        tmp_output.read_to_end(&mut file_output)?;
+        
+        drop(tmp_input);
+        drop(tmp_output);
+
+        // Delete temporary files
+        let _ = std::fs::remove_file(&tmp_input_fp)?;
+        let _ = std::fs::remove_file(&tmp_output_fp)?;
 
         assert!(byte_compr_collapsed_eq(&file_output, &expect_output), 
                 "Byte-level compression is invalid");
-
-        // Delete temporary files
-        std::fs::remove_file(&tmp_input_fp)?;
-        std::fs::remove_file(&tmp_output_fp)?;
 
         Ok(())
     }
@@ -594,11 +581,14 @@ mod tests {
 
         let compressor = FileCompressor::new(&settings);
 
+        let mut tmp_input = File::open(tmp_input_fp.clone())?;
+        let mut tmp_output = File::create(tmp_output_fp.clone())?;
+
         // Actual compression
         compressor.compress_input_to_output(
-        &FileCompressPipeline {
-            input: tmp_input_fp.clone(),
-            output: tmp_output_fp.clone(),
+        FileCompressPipeline {
+            input: &mut tmp_input,
+            output: &mut tmp_output,
         });
 
         // Check compression
@@ -639,15 +629,19 @@ mod tests {
 
         let compressor = FileCompressor::new(&settings);
 
+        let mut tmp_input = File::open(tmp_input_fp.clone())?;
+        let mut tmp_output = File::create(tmp_output_fp.clone())?;
+        let mut tmp_final_output = File::create(tmp_final_output_fp.clone())?;
+
         compressor.compress_input_to_output(
-        &FileCompressPipeline {
-            input: tmp_input_fp.clone(),
-            output: tmp_output_fp.clone(),
+        FileCompressPipeline {
+            input: &mut tmp_input,
+            output: &mut tmp_output,
         });
         compressor.decompress_input_to_output(
-        &FileCompressPipeline {
-            input: tmp_output_fp.clone(),
-            output: tmp_final_output_fp.clone(),
+        FileCompressPipeline {
+            input: &mut tmp_output,
+            output: &mut tmp_final_output,
         });
 
         let mut input= File::open(&tmp_final_output_fp)?;
@@ -686,15 +680,19 @@ mod tests {
 
         let compressor = FileCompressor::new(&settings);
 
+        let mut tmp_input = File::open(tmp_input_fp.clone())?;
+        let mut tmp_output = File::create(tmp_output_fp.clone())?;
+        let mut tmp_final_output = File::create(tmp_final_output_fp.clone())?;
+
         compressor.compress_input_to_output(
-        &FileCompressPipeline {
-            input: tmp_input_fp.clone(),
-            output: tmp_output_fp.clone(),
+        FileCompressPipeline {
+            input: &mut tmp_input,
+            output: &mut tmp_output,
         });
         compressor.decompress_input_to_output(
-        &FileCompressPipeline {
-            input: tmp_output_fp.clone(),
-            output: tmp_final_output_fp.clone(),
+        FileCompressPipeline {
+            input: &mut tmp_output,
+            output: &mut tmp_final_output,
         });
 
         let mut input= File::open(&tmp_final_output_fp)?;
