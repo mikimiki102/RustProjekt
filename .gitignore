@@ -1,1 +1,4 @@
 /target
+*.rle
+restored_*.bin
+compressed_*.rle
