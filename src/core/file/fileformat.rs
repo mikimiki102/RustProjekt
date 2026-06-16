@@ -1,29 +1,21 @@
 //! File: fileformat.rs.
-//! 
+//!
 //! Provides [`FileFormater`] structure for final compressing
 //! or decompressing an input file to output.
 //! Specify data flow using [`FileFormaterPipeline`].
 
 use super::fileanalyze::FileAnalyzer;
 use super::filecompress::FileCompressor;
-use std::path::PathBuf;
-use std::fs::{
-    File, 
-    OpenOptions
-};
 use crate::core::file::filecompress::{
-    CompressorLevel, 
-    FileCompressPipeline, 
-    FileCompressSettings
+    CompressorLevel, FileCompressPipeline, FileCompressSettings,
 };
-use std::io::{
-    Write, 
-    Read
-};
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct FileFormaterHints {
-    pub chunk_size_hint: usize
+    pub chunk_size_hint: usize,
 }
 
 impl FileFormaterHints {
@@ -31,7 +23,7 @@ impl FileFormaterHints {
         const DEFAULT_CHUNK_SIZE: usize = 4096;
 
         Self {
-            chunk_size_hint: DEFAULT_CHUNK_SIZE
+            chunk_size_hint: DEFAULT_CHUNK_SIZE,
         }
     }
 }
@@ -44,7 +36,7 @@ pub struct FileFormaterPipeline {
 
 #[derive(Debug)]
 pub struct FileFormater {
-    pub analyzer: FileAnalyzer
+    pub analyzer: FileAnalyzer,
 }
 
 impl FileFormater {
@@ -57,40 +49,45 @@ impl FileFormater {
     /// That is final abstraction layer of  the compression workflow.
     /// Specify optional `compressor_hints` for custom workmode, or `None` for default behaviour.
     /// Output file: `pipeline.output` is expected to be non-existent.
-    pub fn file_compress(&self, 
-                         pipeline: &FileFormaterPipeline, 
-                         compressor_hints: Option<FileFormaterHints>) 
-    {
+    pub fn file_compress(
+        &self,
+        pipeline: &FileFormaterPipeline,
+        compressor_hints: Option<FileFormaterHints>,
+    ) {
         let input_fp = &pipeline.input_fp;
         let output_fp = &pipeline.output_fp;
 
         let compressor_hints = compressor_hints.unwrap_or(FileFormaterHints::default());
         let chunk_size_hint = compressor_hints.chunk_size_hint;
 
-        let compression_level = self.analyzer.get_suggested_compression(input_fp).unwrap().unwrap();
+        let compression_level = self
+            .analyzer
+            .get_suggested_compression(input_fp)
+            .unwrap()
+            .unwrap();
 
-        let compressor = FileCompressor::new(
-            &FileCompressSettings {
-                chunk_size_hint: chunk_size_hint,
-                compression_level: compression_level.clone()
-            }
-        );
+        let compressor = FileCompressor::new(&FileCompressSettings {
+            chunk_size_hint: chunk_size_hint,
+            compression_level: compression_level.clone(),
+        });
 
         let mut output_file = match OpenOptions::new()
-                                            .write(true)
-                                            .append(true) 
-                                            .create(true)
-                                            .open(&output_fp) {
+            .write(true)
+            .append(true)
+            .create(true)
+            .open(&output_fp)
+        {
             Ok(f) => f,
             Err(e) => {
                 panic!("Couldn't create output file: {e}");
             }
         };
-        
+
         let header_byte = compression_level.get_marker_value();
 
-        output_file.write_all(&[header_byte])
-                   .expect("Failed to write header to file");
+        output_file
+            .write_all(&[header_byte])
+            .expect("Failed to write header to file");
 
         let mut input_file = match File::open(&input_fp) {
             Ok(f) => f,
@@ -102,7 +99,7 @@ impl FileFormater {
 
         let compressor_pipeline = FileCompressPipeline {
             input: &mut input_file,
-            output: &mut output_file
+            output: &mut output_file,
         };
 
         compressor.compress_input_to_output(compressor_pipeline);
@@ -113,10 +110,11 @@ impl FileFormater {
 
     /// That is final abstraction layer of decompression workflow.
     /// Specify optional `compressor_hints` for custom workmode, or `None` for default behaviour.
-    pub fn file_decompress(&self, 
-                           pipeline: &FileFormaterPipeline, 
-                           decompressor_hints: Option<FileFormaterHints>) 
-    {
+    pub fn file_decompress(
+        &self,
+        pipeline: &FileFormaterPipeline,
+        decompressor_hints: Option<FileFormaterHints>,
+    ) {
         let input_fp = &pipeline.input_fp;
         let output_fp = &pipeline.output_fp;
 
@@ -130,33 +128,34 @@ impl FileFormater {
                 return;
             }
         };
-        
+
         let mut header_buf = [0u8; 1];
-        input_file.read_exact(&mut header_buf).expect("Failed to read header byte");
+        input_file
+            .read_exact(&mut header_buf)
+            .expect("Failed to read header byte");
         let compression_level = CompressorLevel::from_value(header_buf[0])
-                                                    .expect("Invalid header markers - file is not compressed");
+            .expect("Invalid header markers - file is not compressed");
 
         let mut output_file = match OpenOptions::new()
-                                            .write(true)
-                                            .append(true) 
-                                            .create(true)
-                                            .open(&output_fp) {
+            .write(true)
+            .append(true)
+            .create(true)
+            .open(&output_fp)
+        {
             Ok(f) => f,
             Err(e) => {
                 panic!("Couldn't create output file: {e}");
             }
         };
 
-        let compressor = FileCompressor::new(
-            &FileCompressSettings {
-                chunk_size_hint: chunk_size_hint,
-                compression_level: compression_level.clone()
-            }
-        );
+        let compressor = FileCompressor::new(&FileCompressSettings {
+            chunk_size_hint: chunk_size_hint,
+            compression_level: compression_level.clone(),
+        });
 
         let compressor_pipeline = FileCompressPipeline {
             input: &mut input_file,
-            output: &mut output_file
+            output: &mut output_file,
         };
 
         compressor.decompress_input_to_output(compressor_pipeline);
@@ -169,15 +168,11 @@ mod tests {
     use super::*;
     use crate::core::file::fileanalyze::FileAnalyzerSettings;
     use crate::core::file::filecompress::CompressorLevel;
-    use std::fs;
     use crate::core::file::filecompress::tests::random_byte_data_file;
+    use std::fs;
+    use std::io::{Read, Seek, SeekFrom};
     use tempfile::NamedTempFile;
-    use std::io::{
-        Read, 
-        SeekFrom,
-        Seek
-    };
-    
+
     fn create_test_file(data: &[u8]) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("Failed to create temporary file");
 
@@ -221,18 +216,29 @@ mod tests {
 
         formater.file_compress(&pipeline, None);
 
-        let mut output_file = File::open(&output_fp).expect("Failed to open output file for verification");
+        let mut output_file =
+            File::open(&output_fp).expect("Failed to open output file for verification");
         let mut header_buf = [0u8; 1];
-        output_file.read_exact(&mut header_buf).expect("Failed to read header byte");
+        output_file
+            .read_exact(&mut header_buf)
+            .expect("Failed to read header byte");
 
         let correct_mark = CompressorLevel::CompressorByteLevel.get_marker_value();
 
-        assert_eq!(header_buf[0], correct_mark, "Invalid expected compression level");
+        assert_eq!(
+            header_buf[0], correct_mark,
+            "Invalid expected compression level"
+        );
 
         let mut compressed_data = Vec::new();
-        output_file.read_to_end(&mut compressed_data).expect("Failed to read compressed payload");
+        output_file
+            .read_to_end(&mut compressed_data)
+            .expect("Failed to read compressed payload");
 
-        assert!(!compressed_data.is_empty(), "Empty file data apart from header marker");
+        assert!(
+            !compressed_data.is_empty(),
+            "Empty file data apart from header marker"
+        );
     }
 
     #[test]
@@ -251,7 +257,9 @@ mod tests {
         };
 
         let formater = setup_formater(256, 1);
-        let custom_hints = Some(FileFormaterHints { chunk_size_hint: 1024 });
+        let custom_hints = Some(FileFormaterHints {
+            chunk_size_hint: 1024,
+        });
 
         formater.file_compress(&pipeline, custom_hints);
 
@@ -278,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn test_file_compress_decompress() -> std::io::Result<()> {        
+    fn test_file_compress_decompress() -> std::io::Result<()> {
         let tmp_input_file = NamedTempFile::new()?;
         let mut tmp_output_file = NamedTempFile::new()?;
         let mut tmp_final_output_file = NamedTempFile::new()?;
@@ -287,40 +295,40 @@ mod tests {
         let tmp_output_fp = tmp_output_file.path().to_path_buf();
         let tmp_final_output_fp = tmp_final_output_file.path().to_path_buf();
 
-        let (_compress_output, decompress_output)= 
+        let (_compress_output, decompress_output) =
             random_byte_data_file(tmp_input_fp.clone()).unwrap();
-            
+
         let analyzer_settings = FileAnalyzerSettings {
             probe_chunk_size: 2048,
-            thread_cnt: 2
+            thread_cnt: 2,
         };
 
-        let analyzer= FileAnalyzer::new(&analyzer_settings);
+        let analyzer = FileAnalyzer::new(&analyzer_settings);
 
         let tmp_output = tmp_output_file.as_file_mut();
         let tmp_final_output = tmp_final_output_file.as_file_mut();
 
         let formater = FileFormater::new(&analyzer);
         let formater_hints = FileFormaterHints {
-            chunk_size_hint: 2048
+            chunk_size_hint: 2048,
         };
-        
+
         formater.file_compress(
-            &FileFormaterPipeline { 
-                input_fp: tmp_input_fp.clone(), 
-                output_fp: tmp_output_fp.clone()
-            }, 
-            Some(formater_hints.clone())
+            &FileFormaterPipeline {
+                input_fp: tmp_input_fp.clone(),
+                output_fp: tmp_output_fp.clone(),
+            },
+            Some(formater_hints.clone()),
         );
 
         tmp_output.seek(SeekFrom::Start(0))?;
 
         formater.file_decompress(
-            &FileFormaterPipeline { 
-                input_fp: tmp_output_fp.clone(), 
-                output_fp: tmp_final_output_fp .clone()
-            }, 
-            Some(formater_hints)
+            &FileFormaterPipeline {
+                input_fp: tmp_output_fp.clone(),
+                output_fp: tmp_final_output_fp.clone(),
+            },
+            Some(formater_hints),
         );
 
         tmp_final_output.seek(SeekFrom::Start(0))?;

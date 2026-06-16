@@ -1,3 +1,3 @@
-pub mod filecompress;
 pub mod fileanalyze;
+pub mod filecompress;
 pub mod fileformat;

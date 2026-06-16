@@ -1,5 +1,5 @@
 //! File: fileanalyze.rs.
-//! 
+//!
 //! Provides [`FileAnalyzer`] structure for analyzing file structure
 //! and finally suggesting efficient compression for input file.
 //!
@@ -7,20 +7,10 @@
 
 use super::filecompress::CompressorLevel;
 use crate::get_bit_u8;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
-use std::io::{
-    Read, 
-    Seek, 
-    SeekFrom
-};
-use std::sync::atomic::{
-    AtomicU32, 
-    Ordering
-};
-use std::fs::{
-    self, 
-    File
-};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Specify settings of [`FileAnalyzer`]
 #[derive(Debug, Clone)]
@@ -31,18 +21,17 @@ pub struct FileAnalyzerSettings {
 
 #[derive(Debug, Clone)]
 pub struct FileAnalyzer {
-    pub settings: FileAnalyzerSettings
+    pub settings: FileAnalyzerSettings,
 }
 
 impl FileAnalyzer {
     pub fn new(settings: &FileAnalyzerSettings) -> Self {
-        if settings.probe_chunk_size == 0 ||
-           settings.thread_cnt == 0 {
-           panic!("Invalid settings for FileAnalyzer");
+        if settings.probe_chunk_size == 0 || settings.thread_cnt == 0 {
+            panic!("Invalid settings for FileAnalyzer");
         }
 
         Self {
-            settings: settings.clone()
+            settings: settings.clone(),
         }
     }
 
@@ -55,7 +44,7 @@ impl FileAnalyzer {
             let mut handles = Vec::new();
 
             for i in 0..thread_cnt {
-                let begin= i * size_per_thread;
+                let begin = i * size_per_thread;
                 let end = std::cmp::min(i * size_per_thread + size_per_thread, probe_chunk.len());
                 let chunk_slice = &probe_chunk[begin..end];
 
@@ -89,7 +78,7 @@ impl FileAnalyzer {
             let mut handles = Vec::new();
 
             for i in 0..thread_cnt {
-                let begin= i * size_per_thread;
+                let begin = i * size_per_thread;
                 let end = std::cmp::min(i * size_per_thread + size_per_thread, probe_chunk.len());
                 let chunk_slice = &probe_chunk[begin..end];
 
@@ -121,9 +110,10 @@ impl FileAnalyzer {
 
     /// Returns wrapped `Some` [`CompressorLevel`] for given filepath `fp`.
     /// When error occured, returns `None`.
-    pub fn get_suggested_compression(&self, fp: &PathBuf) 
-        -> std::io::Result<Option<CompressorLevel>> 
-    {
+    pub fn get_suggested_compression(
+        &self,
+        fp: &PathBuf,
+    ) -> std::io::Result<Option<CompressorLevel>> {
         let mut file = File::open(fp)?;
 
         let total_file_size = fs::metadata(fp)?.len() as usize;
@@ -138,7 +128,7 @@ impl FileAnalyzer {
         let bytes_read = file.read(&mut probe_chunk)?;
         probe_chunk.truncate(bytes_read);
 
-        // That might be done faster, by calculating each coefficient concurrently, not 
+        // That might be done faster, by calculating each coefficient concurrently, not
         // sequentially.
         let byte_compression_coeff = self.get_byte_compression_coeff(&probe_chunk);
         let bit_compression_coeff = self.get_bit_compression_coeff(&probe_chunk);
@@ -147,8 +137,7 @@ impl FileAnalyzer {
 
         if byte_compression_coeff > bit_compression_coeff {
             return Ok(Some(CompressorLevel::CompressorByteLevel));
-        }
-        else {
+        } else {
             return Ok(Some(CompressorLevel::CompressorBitLevel));
         }
     }
@@ -159,7 +148,7 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
-    
+
     fn create_test_file(data: &[u8]) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("Failed to create temporary file");
 
@@ -168,9 +157,7 @@ mod tests {
         file
     }
 
-    fn get_test_settings(probe_size: usize, threads: usize) 
-        -> FileAnalyzerSettings 
-    {
+    fn get_test_settings(probe_size: usize, threads: usize) -> FileAnalyzerSettings {
         FileAnalyzerSettings {
             probe_chunk_size: probe_size,
             thread_cnt: threads,
@@ -219,7 +206,7 @@ mod tests {
         let mut data = Vec::new();
         for _ in 0..50 {
             data.push(0b0000_0000);
-            data.push(0b0000_1111); 
+            data.push(0b0000_1111);
         }
 
         let file = create_test_file(&data);
@@ -263,11 +250,10 @@ mod tests {
     fn test_invalid_file_path_returns_error() {
         let settings = get_test_settings(1024, 2);
         let analyzer = FileAnalyzer::new(&settings);
-        
-        let result = analyzer.get_suggested_compression(
-            &PathBuf::from("assets/non_existent_file_12345")
-        );
-        
+
+        let result =
+            analyzer.get_suggested_compression(&PathBuf::from("assets/non_existent_file_12345"));
+
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::NotFound);
     }

@@ -1,2 +1,2 @@
-pub mod memcompress;
 pub mod file;
+pub mod memcompress;

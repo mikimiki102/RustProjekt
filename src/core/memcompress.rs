@@ -1,48 +1,52 @@
 //! File: memcompress.rs.
-//! 
+//!
 //! Functions for memory buffers compression.
 //!
-//! This module provides [`byte_level_compress`] and [`bit_level_compress`] 
+//! This module provides [`byte_level_compress`] and [`bit_level_compress`]
 //! for handling in-memory data buffers.
 //!
-//! For proper file handling and streaming compression, see the 
+//! For proper file handling and streaming compression, see the
 //! [`filecompress`](crate::core::file::filecompress) module.
 
 #[macro_export]
 macro_rules! get_bit_u8 {
-    ($byte:expr, $pos:expr) => 
-    { ((($byte) >> ($pos)) & 1u8) };
+    ($byte:expr, $pos:expr) => {
+        ((($byte) >> ($pos)) & 1u8)
+    };
 }
 #[macro_export]
 macro_rules! set_bit_as_u8 {
-    {$byte:expr, $bit:expr, $pos:expr} => 
+    {$byte:expr, $bit:expr, $pos:expr} =>
     { ($byte |= $bit << $pos) }
 }
 #[macro_export]
 macro_rules! set_bit_u8 {
-    {$byte:expr, $pos:expr} => 
+    {$byte:expr, $pos:expr} =>
     { set_bit_as_u8!(byte, 1, pos); }
 }
 #[macro_export]
 macro_rules! get_repr_bit_u8 {
-    ($byte:expr) => 
-    { (get_bit_u8!($byte, 7u8)) };
+    ($byte:expr) => {
+        (get_bit_u8!($byte, 7u8))
+    };
 }
 #[macro_export]
 macro_rules! get_bit_cnt_u8 {
-    ($byte:expr) => 
-    { (($byte) & 0x7fu8) };
+    ($byte:expr) => {
+        (($byte) & 0x7fu8)
+    };
 }
 #[macro_export]
 macro_rules! bit_cluster_u8 {
-    ($cnt:expr, $bit:expr) => 
-    { (($cnt) | ($bit << 7u8)) };
+    ($cnt:expr, $bit:expr) => {
+        (($cnt) | ($bit << 7u8))
+    };
 }
 
 // We save incoming bytes repeating count in entire byte.
-const MAX_CNT_BYTE_LV_CLUSTER: u8 = u8::MAX;    
+const MAX_CNT_BYTE_LV_CLUSTER: u8 = u8::MAX;
 // We save count in lower 7-bits of a byte, that is u8::MAX / 2 maximum.
-const MAX_CNT_BIT_LV_CLUSTER: u8 = u8::MAX / 2; 
+const MAX_CNT_BIT_LV_CLUSTER: u8 = u8::MAX / 2;
 
 /// Returns compressed memory buffer using byte compression.
 pub fn byte_level_compress(buff: &[u8]) -> Vec<u8> {
@@ -56,11 +60,9 @@ pub fn byte_level_compress(buff: &[u8]) -> Vec<u8> {
     let mut curr_cnt = 1u8;
 
     for &byte in &buff[1..] {
-        if byte == curr_byte && 
-           curr_cnt < MAX_CNT_BYTE_LV_CLUSTER {
+        if byte == curr_byte && curr_cnt < MAX_CNT_BYTE_LV_CLUSTER {
             curr_cnt += 1;
-        } 
-        else {
+        } else {
             result.push(curr_cnt);
             result.push(curr_byte);
 
@@ -92,8 +94,7 @@ pub fn bit_level_compress(buff: &[u8]) -> Vec<u8> {
 
             if bit == curr_bit && curr_cnt < MAX_CNT_BIT_LV_CLUSTER {
                 curr_cnt += 1;
-            }
-            else {
+            } else {
                 let cluster = bit_cluster_u8!(curr_cnt, curr_bit);
                 result.push(cluster);
 
@@ -141,7 +142,7 @@ pub fn bit_level_decompress(data: &[u8]) -> Result<Vec<u8>, &str> {
     if data.is_empty() {
         return Ok(result);
     }
-    
+
     result.push(0u8);
     let mut curr_shf = 0u8;
     let mut total_cnt = 0usize;
@@ -175,7 +176,7 @@ pub fn bit_level_decompress(data: &[u8]) -> Result<Vec<u8>, &str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_byte_empty() {
         let input: [u8; 0] = [];
