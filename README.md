@@ -242,18 +242,6 @@ Testy sprawdzają między innymi:
 * obsługę błędnych ustawień,
 * kompresję i dekompresję z użyciem plików tymczasowych.
 
-## Wyniki testów na plikach przykładowych
-
-Program został przetestowany na większych plikach binarnych znajdujących się w katalogu `assets/example`.
-
-| Plik       | Wybrana metoda | Rozmiar wejściowy | Rozmiar po kompresji |   Wynik | Czas kompresji | Czas dekompresji | Poprawność |
-| ---------- | -------------: | ----------------: | -------------------: | ------: | -------------: | ---------------: | ---------- |
-| `ex_bin_a` |      bit-level |       8 431 776 B |         14 260 708 B | 169.13% |        17.01 s |          22.61 s | OK         |
-| `ex_bin_b` |      bit-level |      16 780 032 B |         32 741 088 B | 195.12% |        22.98 s |          38.04 s | OK         |
-| `ex_bin_c` |      bit-level |      16 313 120 B |         32 092 868 B | 196.73% |        21.44 s |          38.62 s | OK         |
-
-We wszystkich przypadkach po dekompresji pliki zostały odtworzone poprawnie. Porównanie binarne wykazało brak różnic między plikiem oryginalnym a odtworzonym.
-
 ## Wnioski
 
 Program poprawnie realizuje kompresję i dekompresję metodą RLE. Działa zarówno dla kompresji bajtowej, jak i bitowej. Dodatkowo analizator pliku pozwala automatycznie dobrać metodę kompresji na podstawie próbki danych.
@@ -264,5 +252,5 @@ Jeśli dane nie zawierają wielu powtórzeń, zapis liczników i wartości może
 
 
 ## Autorzy
-Szymon Bełz
+Szymon Bełz,
 Mikołaj Wałek
