@@ -208,10 +208,9 @@ impl FileCompressor {
         let (reader_sender, reader_receiver) =
             mpsc::sync_channel::<Vec<u8>>(read_chunk_channel_size);
         let (reader_msg_sender, reader_msg_receiver) = mpsc::sync_channel::<bool>(1);
-
-        // Reading thread.
+        
         // Here, we read chunks of data
-        // and then send them to another thread.
+        // and then send them to another threads.
         let settings = self.settings.clone();
 
         let file = pipeline.input;

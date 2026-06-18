@@ -122,14 +122,13 @@ impl FileAnalyzer {
             return Ok(None);
         }
 
-        let probe_chunk_size = std::cmp::max(self.settings.probe_chunk_size, total_file_size);
+        let probe_chunk_size = 
+            std::cmp::max(self.settings.probe_chunk_size, total_file_size);
 
         let mut probe_chunk = vec![0u8; probe_chunk_size];
         let bytes_read = file.read(&mut probe_chunk)?;
         probe_chunk.truncate(bytes_read);
 
-        // That might be done faster, by calculating each coefficient concurrently, not
-        // sequentially.
         let byte_compression_coeff = self.get_byte_compression_coeff(&probe_chunk);
         let bit_compression_coeff = self.get_bit_compression_coeff(&probe_chunk);
 
@@ -141,6 +140,7 @@ impl FileAnalyzer {
             return Ok(Some(CompressorLevel::CompressorBitLevel));
         }
     }
+
 }
 
 #[cfg(test)]
