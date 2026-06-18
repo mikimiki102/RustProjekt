@@ -53,7 +53,7 @@ impl FileFormater {
         &self,
         pipeline: &FileFormaterPipeline,
         compressor_hints: Option<FileFormaterHints>,
-    ) {
+    ) -> Result<CompressorLevel, &str> {
         let input_fp = &pipeline.input_fp;
         let output_fp = &pipeline.output_fp;
 
@@ -93,7 +93,7 @@ impl FileFormater {
             Ok(f) => f,
             Err(e) => {
                 eprintln!("Couldn't open input file: {e}");
-                return;
+                return Err("Invalid input file");
             }
         };
 
@@ -106,6 +106,8 @@ impl FileFormater {
 
         drop(input_file);
         drop(output_file);
+
+        Ok(compression_level)
     }
 
     /// That is final abstraction layer of decompression workflow.
@@ -214,7 +216,7 @@ mod tests {
 
         let formater = setup_formater(512, 2);
 
-        formater.file_compress(&pipeline, None);
+        let _ = formater.file_compress(&pipeline, None);
 
         let mut output_file =
             File::open(&output_fp).expect("Failed to open output file for verification");
@@ -261,7 +263,7 @@ mod tests {
             chunk_size_hint: 1024,
         });
 
-        formater.file_compress(&pipeline, custom_hints);
+        let _ = formater.file_compress(&pipeline, custom_hints);
 
         let metadata = fs::metadata(&output_fp).expect("Output file was not created");
         assert!(metadata.len() > 0);
@@ -282,7 +284,7 @@ mod tests {
         };
 
         let formater = setup_formater(512, 2);
-        formater.file_compress(&pipeline, None);
+        let _ = formater.file_compress(&pipeline, None);
     }
 
     #[test]
@@ -313,7 +315,7 @@ mod tests {
             chunk_size_hint: 2048,
         };
 
-        formater.file_compress(
+        let _ = formater.file_compress(
             &FileFormaterPipeline {
                 input_fp: tmp_input_fp.clone(),
                 output_fp: tmp_output_fp.clone(),

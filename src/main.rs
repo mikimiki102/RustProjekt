@@ -7,21 +7,19 @@ use std::time::Instant;
 pub mod core;
 
 use crate::core::file::fileanalyze::{FileAnalyzer, FileAnalyzerSettings};
-use crate::core::file::filecompress::CompressorLevel;
 use crate::core::file::fileformat::{FileFormater, FileFormaterHints, FileFormaterPipeline};
+
+macro_rules! to_kb {
+    ($kb_cnt:expr) => {
+        $kb_cnt * 1024
+    };
+}
 
 fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  cargo run -- compress <input_file> <output_file.rle>");
     eprintln!("  cargo run -- decompress <input_file.rle> <output_file>");
     eprintln!("  cargo run -- analyze <input_file>");
-}
-
-fn compression_name(level: &CompressorLevel) -> &'static str {
-    match level {
-        CompressorLevel::CompressorByteLevel => "byte-level",
-        CompressorLevel::CompressorBitLevel => "bit-level",
-    }
 }
 
 fn print_size_stats(input_size: u64, output_size: u64) {
@@ -44,17 +42,11 @@ fn print_size_stats(input_size: u64, output_size: u64) {
 
 fn create_analyzer() -> FileAnalyzer {
     let settings = FileAnalyzerSettings {
-        probe_chunk_size: 4096,
-        thread_cnt: 4,
+        probe_chunk_size: to_kb!(512),
+        thread_cnt: 2,
     };
 
     FileAnalyzer::new(&settings)
-}
-
-fn create_hints() -> FileFormaterHints {
-    FileFormaterHints {
-        chunk_size_hint: 4096,
-    }
 }
 
 fn remove_output_if_exists(output_path: &PathBuf) {
@@ -77,7 +69,7 @@ fn analyze_file(input_path: &PathBuf, analyzer: &FileAnalyzer) {
 
     match result {
         Some(level) => {
-            println!("Suggested compression: {}", compression_name(&level));
+            println!("Suggested compression: {}", level.to_str());
         }
         None => {
             println!("File is empty. No compression suggested.");
@@ -90,18 +82,6 @@ fn compress_file(input_path: PathBuf, output_path: PathBuf, analyzer: &FileAnaly
         eprintln!("Input file does not exist: {:?}", input_path);
         process::exit(1);
     }
-
-    let suggested = match analyzer.get_suggested_compression(&input_path) {
-        Ok(Some(level)) => level,
-        Ok(None) => {
-            eprintln!("Input file is empty. Nothing to compress.");
-            process::exit(1);
-        }
-        Err(error) => {
-            eprintln!("Analyze error: {}", error);
-            process::exit(1);
-        }
-    };
 
     remove_output_if_exists(&output_path);
 
@@ -116,12 +96,18 @@ fn compress_file(input_path: PathBuf, output_path: PathBuf, analyzer: &FileAnaly
         output_fp: output_path.clone(),
     };
 
-    let hints = create_hints();
-
-    println!("Selected compression: {}", compression_name(&suggested));
+    let hints = FileFormaterHints::default();
 
     let start = Instant::now();
-    formater.file_compress(&pipeline, Some(hints));
+    let suggested = formater.file_compress(&pipeline, Some(hints));
+
+    if suggested.is_ok() {
+        println!("Selected compression: {}", suggested.unwrap().to_str());
+    }
+    else {
+        println!("Error occured while compressing input file.");
+    }
+
     let duration = start.elapsed();
 
     let output_size = fs::metadata(&output_path)
@@ -152,7 +138,7 @@ fn decompress_file(input_path: PathBuf, output_path: PathBuf, analyzer: &FileAna
         output_fp: output_path.clone(),
     };
 
-    let hints = create_hints();
+    let hints = FileFormaterHints::default();
 
     let start = Instant::now();
     formater.file_decompress(&pipeline, Some(hints));
@@ -179,6 +165,7 @@ fn main() {
     let analyzer = create_analyzer();
 
     match mode.as_str() {
+        // Analyze mode - get suggested compression for input file
         "analyze" => {
             if args.len() != 3 {
                 print_usage();
@@ -189,6 +176,7 @@ fn main() {
             analyze_file(&input_path, &analyzer);
         }
 
+        // Compression mode - transform input file to compressed output
         "compress" => {
             if args.len() != 4 {
                 print_usage();
@@ -201,6 +189,7 @@ fn main() {
             compress_file(input_path, output_path, &analyzer);
         }
 
+        // Decompression mode - transform compressed input to output
         "decompress" => {
             if args.len() != 4 {
                 print_usage();

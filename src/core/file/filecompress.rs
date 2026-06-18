@@ -71,6 +71,14 @@ impl CompressorLevel {
 
         None
     }
+
+
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            CompressorLevel::CompressorByteLevel => "byte-level",
+            CompressorLevel::CompressorBitLevel => "bit-level",
+        }
+    }
 }
 
 /// Specify input file and output file for the compressor.
